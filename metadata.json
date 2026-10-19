@@ -1,0 +1,6 @@
+{
+  "name": "RAJPAL Cloths Store - Attendance & Payroll Management",
+  "description": "Employee attendance, salary, overtime, and payroll management system for RAJPAL Cloths Store with strict role-based access control.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
