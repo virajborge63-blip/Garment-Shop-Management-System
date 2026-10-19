@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import express from 'express';
+import http from 'node:http';
 import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
@@ -11,6 +12,7 @@ import employeeRoutes from './server/routes/employeeRoutes.ts';
 
 async function startServer() {
   const app = express();
+  const httpServer = http.createServer(app);
   const PORT = Number(process.env.PORT) || 3000;
 
   // Initialize SQLite schema and safe idempotent database setup
@@ -60,11 +62,16 @@ async function startServer() {
   // Production vs Development mode detection
   const isProduction =
     process.env.NODE_ENV === 'production' ||
-    (process.env.NODE_ENV !== 'development' && fs.existsSync(path.join(process.cwd(), 'dist', 'index.html')));
+    process.argv[1]?.endsWith('server.cjs') ||
+    process.env.npm_lifecycle_event === 'start';
 
   if (!isProduction) {
+    const isHmrDisabled = process.env.DISABLE_HMR === 'true';
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: isHmrDisabled ? false : { server: httpServer },
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -101,7 +108,7 @@ async function startServer() {
     });
   });
 
-  app.listen(PORT, '0.0.0.0', () => {
+  httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`[Server] Garment Shop Management System listening at http://0.0.0.0:${PORT} (${isProduction ? 'production' : 'development'})`);
   });
 }

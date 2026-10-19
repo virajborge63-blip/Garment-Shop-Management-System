@@ -22,10 +22,24 @@
     <meta name="apple-mobile-web-app-title" content="RajpalERP" />
     <meta name="application-name" content="H.M. RAJPAL GARMENT SHOP" />
     <meta name="msapplication-TileColor" content="#020617" />
+    <script>
+      // Gracefully suppress benign Vite dev-server HMR WebSocket disconnect noise in cloud preview iframe
+      window.addEventListener('unhandledrejection', function(event) {
+        if (event.reason && String(event.reason).includes('WebSocket closed without opened')) {
+          event.preventDefault();
+        }
+      });
+      const originalConsoleError = console.error;
+      console.error = function(...args) {
+        if (args.some(arg => typeof arg === 'string' && (arg.includes('[vite] WebSocket closed without opened') || arg.includes('WebSocket closed without opened')))) {
+          return;
+        }
+        originalConsoleError.apply(console, args);
+      };
+    </script>
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
-
