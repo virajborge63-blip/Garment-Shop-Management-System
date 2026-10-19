@@ -7,12 +7,13 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 // Determine database path: prioritize DB_PATH environment variable (for Render persistent disks or local config)
-const rawDbPath = process.env.DB_PATH || 'erp_management.db';
-const dbPath = path.isAbsolute(rawDbPath)
+// Defaults to ./data/erp_management.db to ensure database files stay outside the source root
+const rawDbPath = process.env.DB_PATH || path.join('data', 'erp_management.db');
+export const dbPath = path.isAbsolute(rawDbPath)
   ? rawDbPath
   : path.resolve(process.cwd(), rawDbPath);
 
-// Ensure the parent directory exists (critical for Render persistent disk mounts, e.g., /var/data)
+// Ensure the parent directory exists (critical for Render persistent disk mounts e.g. /var/data or ./data)
 const dbDir = path.dirname(dbPath);
 if (!fs.existsSync(dbDir)) {
   try {
@@ -26,10 +27,74 @@ if (!fs.existsSync(dbDir)) {
 console.log(`[Database] Initializing SQLite connection at: ${dbPath}`);
 export const db = new DatabaseSync(dbPath);
 
-// Helper to hash passwords securely with salt/secret from environment
+/**
+ * Constant-time string equality helper to prevent timing attacks.
+ */
+function safeEqual(a: string, b: string): boolean {
+  const bufA = Buffer.from(a, 'utf8');
+  const bufB = Buffer.from(b, 'utf8');
+  if (bufA.length !== bufB.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
+/**
+ * Modern cryptographically secure password hashing using Node's native scrypt.
+ * Output format: scrypt$<saltHex>$<derivedKeyHex>
+ */
 export function hashPassword(password: string): string {
-  const secret = process.env.SESSION_SECRET || 'erp_salt_2026_secure';
-  return crypto.createHash('sha256').update(password + secret).digest('hex');
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derivedKey = crypto.scryptSync(password, salt, 64, { N: 16384, r: 8, p: 1 }).toString('hex');
+  return `scrypt$${salt}$${derivedKey}`;
+}
+
+/**
+ * Verifies a password against a stored hash.
+ * Supports:
+ *  1. Modern scrypt format: scrypt$<salt>$<derivedKey>
+ *  2. Salted SHA-256 (using SESSION_SECRET or fallback salt)
+ *  3. Plain unsalted SHA-256 (from legacy initial repository)
+ */
+export function verifyPassword(password: string, storedHash: string): boolean {
+  if (!password || !storedHash) {
+    return false;
+  }
+
+  try {
+    // 1. Modern scrypt format: scrypt$<salt>$<derivedKeyHex>
+    if (storedHash.startsWith('scrypt$')) {
+      const parts = storedHash.split('$');
+      if (parts.length !== 3) {
+        return false;
+      }
+      const [, salt, expectedKeyHex] = parts;
+      const derivedKey = crypto.scryptSync(password, salt, 64, { N: 16384, r: 8, p: 1 });
+      const expectedKey = Buffer.from(expectedKeyHex, 'hex');
+      if (derivedKey.length !== expectedKey.length) {
+        return false;
+      }
+      return crypto.timingSafeEqual(derivedKey, expectedKey);
+    }
+
+    // 2. Legacy SHA-256 with environment secret / salt
+    const secret = process.env.SESSION_SECRET || 'erp_salt_2026_secure';
+    const legacySaltedHash = crypto.createHash('sha256').update(password + secret).digest('hex');
+    if (safeEqual(legacySaltedHash, storedHash)) {
+      return true;
+    }
+
+    // 3. Legacy plain SHA-256 (from original template)
+    const plainSha256 = crypto.createHash('sha256').update(password).digest('hex');
+    if (safeEqual(plainSha256, storedHash)) {
+      return true;
+    }
+  } catch (err) {
+    console.error('[Auth Error] Password verification failed with error:', err);
+    return false;
+  }
+
+  return false;
 }
 
 /**
@@ -37,9 +102,10 @@ export function hashPassword(password: string): string {
  * Never deletes employees, attendance, payroll, sessions, or users.
  */
 export function initDatabase() {
-  // Enable foreign keys and Write-Ahead Logging for high performance & safe persistence
+  // Enable foreign keys, WAL mode, and normal synchronous writes for durability and performance
   db.exec('PRAGMA foreign_keys = ON;');
   db.exec('PRAGMA journal_mode = WAL;');
+  db.exec('PRAGMA synchronous = NORMAL;');
 
   // 1. Users table
   db.exec(`

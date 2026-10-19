@@ -8,11 +8,14 @@ dist/
 build/
 coverage/
 
-# Local SQLite databases, write-ahead logs, and temporary journals
+# Local SQLite databases, storage directories, write-ahead logs, and temporary journals
 *.db
 *.db-journal
 *.db-wal
 *.db-shm
+*.sqlite
+*.sqlite3
+data/
 erp_management.db
 
 # Environment variables, credentials, and secrets

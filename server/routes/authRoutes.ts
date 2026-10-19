@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { db, hashPassword, logAudit } from '../db.ts';
+import { db, hashPassword, verifyPassword, logAudit } from '../db.ts';
 import { createSession, authenticateToken, AuthRequest } from '../auth.ts';
 
 const router = Router();
@@ -43,9 +43,20 @@ router.post('/login', (req: Request, res: Response) => {
       return res.status(403).json({ error: 'Your account is deactivated. Contact HR/Administrator.' });
     }
 
-    const hashedInput = hashPassword(cleanPass);
-    if (user.password_hash !== hashedInput) {
+    const isValidPassword = verifyPassword(cleanPass, user.password_hash);
+    if (!isValidPassword) {
       return res.status(401).json({ error: 'Invalid password. Please try again.' });
+    }
+
+    // If password was verified using legacy hash (SHA-256), seamlessly upgrade to modern scrypt hash
+    if (!user.password_hash.startsWith('scrypt$')) {
+      try {
+        const upgradedHash = hashPassword(cleanPass);
+        db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(upgradedHash, user.id);
+        console.log(`[Security] Upgraded legacy password hash to scrypt for user: ${user.username}`);
+      } catch (upgradeErr) {
+        console.warn('[Security Notice] Could not upgrade legacy password hash:', upgradeErr);
+      }
     }
 
     // Create session
@@ -122,7 +133,7 @@ router.post('/setup-admin', (req: Request, res: Response) => {
       // If a Super Admin already exists, setupToken is strictly required to prevent unauthorized takeover
       if (!configuredSetupToken || setupToken !== configuredSetupToken) {
         return res.status(403).json({
-          error: 'Administrator already configured. A valid SETUP_TOKEN is required to manage administrator credentials.'
+          error: 'Administrator already configured. A valid SETUP_TOKEN is required in the request body to reset administrator credentials, or use CLI: npm run setup:admin --reset.'
         });
       }
     } else if (configuredSetupToken) {
@@ -142,7 +153,7 @@ router.post('/setup-admin', (req: Request, res: Response) => {
         WHERE id = ?
       `).run(adminUsername, passwordHash, existingUser.id);
 
-      logAudit(adminUsername, 'Setup API', 'SUPER_ADMIN_UPDATED', 'users', '', `Updated Super Admin ${trimmedEmail}`);
+      logAudit(adminUsername, 'Setup API', 'SUPER_ADMIN_PASSWORD_RESET', 'users', '', `Authorized Super Admin password reset for ${trimmedEmail}`);
       return res.json({ success: true, message: 'Administrator credentials updated successfully.' });
     } else {
       db.prepare(`
@@ -150,7 +161,7 @@ router.post('/setup-admin', (req: Request, res: Response) => {
         VALUES (?, ?, ?, 'SUPER_ADMIN', null, 'active')
       `).run(adminUsername, trimmedEmail, passwordHash);
 
-      logAudit(adminUsername, 'Setup API', 'SUPER_ADMIN_CREATED', 'users', '', `Created Super Admin ${trimmedEmail}`);
+      logAudit(adminUsername, 'Setup API', 'SUPER_ADMIN_CREATED', 'users', '', `Created initial Super Admin for ${trimmedEmail}`);
       return res.json({ success: true, message: 'Super Administrator created successfully.' });
     }
   } catch (err: any) {
