@@ -4,7 +4,7 @@ import { createSession, authenticateToken, AuthRequest } from '../auth.ts';
 
 const router = Router();
 
-// Login
+// 1. User Login
 router.post('/login', (req: Request, res: Response) => {
   try {
     const { identifier, password } = req.body;
@@ -13,8 +13,16 @@ router.post('/login', (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Username/Email and password are required.' });
     }
 
-    const trimmedId = String(identifier).trim();
-    const cleanPass = String(password);
+    if (typeof identifier !== 'string' || typeof password !== 'string') {
+      return res.status(400).json({ error: 'Invalid input format.' });
+    }
+
+    const trimmedId = identifier.trim();
+    const cleanPass = password;
+
+    if (trimmedId.length === 0 || cleanPass.length === 0 || trimmedId.length > 255 || cleanPass.length > 255) {
+      return res.status(400).json({ error: 'Credentials must be within valid length limits.' });
+    }
 
     // Look up user by username, email, or linked employee_id
     const userStmt = db.prepare(`
@@ -71,17 +79,92 @@ router.post('/login', (req: Request, res: Response) => {
       }
     });
   } catch (err: any) {
-    console.error('Login error:', err);
+    console.error('Login error:', err?.message || 'Authentication error');
     return res.status(500).json({ error: 'Authentication failed due to server error.' });
   }
 });
 
-// Verify current session
+// 2. Protected Administrator Provisioning Endpoint
+router.post('/setup-admin', (req: Request, res: Response) => {
+  try {
+    const { email, password, username, setupToken } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password are required for administrator setup.' });
+    }
+
+    if (typeof email !== 'string' || typeof password !== 'string') {
+      return res.status(400).json({ error: 'Invalid input format.' });
+    }
+
+    const trimmedEmail = email.trim().toLowerCase();
+    const cleanPassword = password.trim();
+    const adminUsername = (typeof username === 'string' && username.trim()) ? username.trim() : 'owner_admin';
+
+    // Email format validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(trimmedEmail)) {
+      return res.status(400).json({ error: 'Invalid email address provided.' });
+    }
+
+    // Password strength check
+    if (cleanPassword.length < 8) {
+      return res.status(400).json({ error: 'Password must be at least 8 characters long.' });
+    }
+
+    // Check existing Super Admin status
+    const adminCountRow = db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'SUPER_ADMIN'").get() as { count: number };
+    const hasExistingSuperAdmin = adminCountRow && adminCountRow.count > 0;
+
+    const configuredSetupToken = process.env.SETUP_TOKEN;
+
+    if (hasExistingSuperAdmin) {
+      // If a Super Admin already exists, setupToken is strictly required to prevent unauthorized takeover
+      if (!configuredSetupToken || setupToken !== configuredSetupToken) {
+        return res.status(403).json({
+          error: 'Administrator already configured. A valid SETUP_TOKEN is required to manage administrator credentials.'
+        });
+      }
+    } else if (configuredSetupToken) {
+      // Even on first setup, if SETUP_TOKEN is set in environment, verify it
+      if (setupToken !== configuredSetupToken) {
+        return res.status(403).json({ error: 'Invalid SETUP_TOKEN provided.' });
+      }
+    }
+
+    const passwordHash = hashPassword(cleanPassword);
+
+    const existingUser = db.prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?)').get(trimmedEmail) as any;
+    if (existingUser) {
+      db.prepare(`
+        UPDATE users 
+        SET username = ?, password_hash = ?, role = 'SUPER_ADMIN', status = 'active'
+        WHERE id = ?
+      `).run(adminUsername, passwordHash, existingUser.id);
+
+      logAudit(adminUsername, 'Setup API', 'SUPER_ADMIN_UPDATED', 'users', '', `Updated Super Admin ${trimmedEmail}`);
+      return res.json({ success: true, message: 'Administrator credentials updated successfully.' });
+    } else {
+      db.prepare(`
+        INSERT INTO users (username, email, password_hash, role, employee_id, status)
+        VALUES (?, ?, ?, 'SUPER_ADMIN', null, 'active')
+      `).run(adminUsername, trimmedEmail, passwordHash);
+
+      logAudit(adminUsername, 'Setup API', 'SUPER_ADMIN_CREATED', 'users', '', `Created Super Admin ${trimmedEmail}`);
+      return res.json({ success: true, message: 'Super Administrator created successfully.' });
+    }
+  } catch (err: any) {
+    console.error('Admin setup error:', err?.message || err);
+    return res.status(500).json({ error: 'Administrator setup failed.' });
+  }
+});
+
+// 3. Verify Current Session
 router.get('/me', authenticateToken, (req: AuthRequest, res: Response) => {
   return res.json({ user: req.user });
 });
 
-// Logout
+// 4. Logout
 router.post('/logout', authenticateToken, (req: AuthRequest, res: Response) => {
   try {
     const authHeader = req.headers.authorization;
@@ -95,29 +178,21 @@ router.post('/logout', authenticateToken, (req: AuthRequest, res: Response) => {
   }
 });
 
-// Forgot Password
+// 5. Forgot Password
 router.post('/forgot-password', (req: Request, res: Response) => {
   const { email } = req.body;
-  if (!email) {
-    return res.status(400).json({ error: 'Email address is required.' });
+  if (!email || typeof email !== 'string') {
+    return res.status(400).json({ error: 'Valid email address is required.' });
   }
 
-  // Password reset request
-  const user = db.prepare('SELECT id, email, username, role FROM users WHERE LOWER(email) = LOWER(?)').get(email) as any;
-  if (user) {
-    return res.json({
-      success: true,
-      message: `Password reset request registered for ${email}. Please contact the Super Admin / Store Owner to reset your credentials.`
-    });
-  }
-
+  // Safe response: do not leak whether user exists
   return res.json({
     success: true,
-    message: `If an account with that email exists, password reset request has been registered.`
+    message: 'If an account associated with this email exists, password reset instructions have been logged. Please contact your Super Admin to update credentials.'
   });
 });
 
-// Demo accounts endpoint (disabled - clean production state)
+// 6. Demo accounts endpoint (disabled - clean production state)
 router.get('/demo-accounts', (req: Request, res: Response) => {
   return res.json({ accounts: [] });
 });

@@ -2,19 +2,44 @@ import { DatabaseSync } from 'node:sqlite';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
+import dotenv from 'dotenv';
 
-const dbPath = path.resolve(process.cwd(), 'erp_management.db');
-export const db = new DatabaseSync(dbPath);
+dotenv.config();
 
-// Helper to hash passwords securely with salt
-export function hashPassword(password: string): string {
-  const salt = 'erp_salt_2026_secure';
-  return crypto.createHash('sha256').update(password + salt).digest('hex');
+// Determine database path: prioritize DB_PATH environment variable (for Render persistent disks or local config)
+const rawDbPath = process.env.DB_PATH || 'erp_management.db';
+const dbPath = path.isAbsolute(rawDbPath)
+  ? rawDbPath
+  : path.resolve(process.cwd(), rawDbPath);
+
+// Ensure the parent directory exists (critical for Render persistent disk mounts, e.g., /var/data)
+const dbDir = path.dirname(dbPath);
+if (!fs.existsSync(dbDir)) {
+  try {
+    fs.mkdirSync(dbDir, { recursive: true });
+    console.log(`[Database] Created persistent storage directory: ${dbDir}`);
+  } catch (dirErr: any) {
+    console.error(`[Database Error] Could not create directory ${dbDir}:`, dirErr?.message || dirErr);
+  }
 }
 
+console.log(`[Database] Initializing SQLite connection at: ${dbPath}`);
+export const db = new DatabaseSync(dbPath);
+
+// Helper to hash passwords securely with salt/secret from environment
+export function hashPassword(password: string): string {
+  const secret = process.env.SESSION_SECRET || 'erp_salt_2026_secure';
+  return crypto.createHash('sha256').update(password + secret).digest('hex');
+}
+
+/**
+ * Initializes database schema idempotently.
+ * Never deletes employees, attendance, payroll, sessions, or users.
+ */
 export function initDatabase() {
-  // Enable foreign keys
+  // Enable foreign keys and Write-Ahead Logging for high performance & safe persistence
   db.exec('PRAGMA foreign_keys = ON;');
+  db.exec('PRAGMA journal_mode = WAL;');
 
   // 1. Users table
   db.exec(`
@@ -132,8 +157,8 @@ export function initDatabase() {
     );
   `);
 
-  // Configure store production settings
-  const insertSetting = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
+  // Initialize default store settings safely without overriding customized user settings
+  const insertSetting = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');
   insertSetting.run('company_name', 'H.M. RAJPAL GARMENT SHOP');
   insertSetting.run('company_address', 'Shop No. 12-14, Cloth Market, Main Bazaar');
   insertSetting.run('company_phone', '+91 98234 56789');
@@ -143,57 +168,57 @@ export function initDatabase() {
   insertSetting.run('leave_is_paid', 'true');
   insertSetting.run('currency_symbol', '₹');
 
-  // Clear all default sample data so owner receives a clean slate system
-  wipeDefaultDataAndEnsureOwner();
+  // Purge only expired sessions (safe housekeeping, never affects active sessions)
+  try {
+    db.exec("DELETE FROM sessions WHERE datetime(expires_at) < datetime('now');");
+  } catch (sessErr) {
+    console.warn('[Database] Expired sessions housekeeping skipped:', sessErr);
+  }
+
+  // Safe idempotent administrator check: only initialize if no Super Admin exists
+  ensureInitialAdmin();
 }
 
 /**
- * Removes all default dummy employees, attendance logs, payrolls, and test users.
- * Establishes the real Super Admin owner account: hmrajapal11@gmail.com / RajpalHM@89565
+ * Idempotently creates the initial Super Admin administrator if no Super Admin exists in the database.
+ * Uses environment variables ADMIN_EMAIL and ADMIN_PASSWORD (or INITIAL_ADMIN_EMAIL / INITIAL_ADMIN_PASSWORD).
+ * Never overwrites or resets existing administrators on reboot.
  */
-export function wipeDefaultDataAndEnsureOwner() {
-  console.log('Ensuring clean production state with Super Admin Owner hmrajapal11@gmail.com...');
+export function ensureInitialAdmin() {
+  try {
+    const adminRow = db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'SUPER_ADMIN'").get() as { count: number } | undefined;
+    
+    if (adminRow && adminRow.count > 0) {
+      // Super admin exists; preserve existing administrator credentials safely
+      return;
+    }
 
-  // Delete all dummy employee records and cascade-linked attendance and payroll
-  db.exec('PRAGMA foreign_keys = OFF;');
-  db.exec('DELETE FROM attendance;');
-  db.exec('DELETE FROM payroll;');
-  db.exec('DELETE FROM employees;');
-  db.exec('DELETE FROM sessions;');
-  
-  // Remove dummy users (keep only if any real users exist, or clear all)
-  db.exec("DELETE FROM users WHERE email != 'hmrajapal11@gmail.com' AND username != 'hmrajpal';");
-  db.exec('DELETE FROM audit_logs;');
-  db.exec('PRAGMA foreign_keys = ON;');
+    const email = process.env.ADMIN_EMAIL || process.env.INITIAL_ADMIN_EMAIL;
+    const password = process.env.ADMIN_PASSWORD || process.env.INITIAL_ADMIN_PASSWORD;
+    const username = process.env.ADMIN_USERNAME || process.env.INITIAL_ADMIN_USERNAME || 'owner_admin';
 
-  // Insert or update the Super Admin Owner
-  const ownerPassHash = hashPassword('RajpalHM@89565');
-  const existingOwner = db.prepare(`
-    SELECT id FROM users 
-    WHERE email = 'hmrajapal11@gmail.com' OR username = 'hmrajpal'
-  `).get() as any;
+    if (email && password) {
+      const passwordHash = hashPassword(password);
+      db.prepare(`
+        INSERT INTO users (username, email, password_hash, role, employee_id, status)
+        VALUES (?, ?, ?, 'SUPER_ADMIN', null, 'active')
+      `).run(username, email, passwordHash);
 
-  if (existingOwner) {
-    db.prepare(`
-      UPDATE users 
-      SET username = 'hmrajpal', email = 'hmrajapal11@gmail.com', password_hash = ?, 
-          role = 'SUPER_ADMIN', employee_id = null, status = 'active'
-      WHERE id = ?
-    `).run(ownerPassHash, existingOwner.id);
-  } else {
-    db.prepare(`
-      INSERT INTO users (username, email, password_hash, role, employee_id, status)
-      VALUES ('hmrajpal', 'hmrajapal11@gmail.com', ?, 'SUPER_ADMIN', null, 'active')
-    `).run(ownerPassHash);
+      logAudit(
+        username,
+        'System Setup',
+        'SUPER_ADMIN_INITIALIZED',
+        'users',
+        '',
+        `Initial Super Admin owner initialized from environment variables (${email})`
+      );
+      console.log(`[Database] Initial Super Admin account created: ${email}`);
+    } else {
+      console.log('[Database Notice] No Super Admin found in database. Configure ADMIN_EMAIL and ADMIN_PASSWORD in environment variables, or run "npm run setup:admin" to configure.');
+    }
+  } catch (err: any) {
+    console.error('[Database Warning] ensureInitialAdmin check failed:', err?.message || err);
   }
-
-  // Initial audit log
-  db.prepare(`
-    INSERT INTO audit_logs (admin_id, admin_name, action, record_affected, previous_value, new_value, timestamp)
-    VALUES ('hmrajpal', 'H.M. Rajpal (Owner)', 'SYSTEM_INITIALIZED', 'H.M. RAJPAL GARMENT SHOP Database', '', 'Production clean slate ready for Store Owner (hmrajapal11@gmail.com)', datetime('now'))
-  `).run();
-
-  console.log('Production ready: Super Admin Owner created (hmrajapal11@gmail.com). Dummy data wiped.');
 }
 
 // Optional helper for user testing if requested via Super Admin settings
