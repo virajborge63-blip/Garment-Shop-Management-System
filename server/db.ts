@@ -1,31 +1,73 @@
-import { DatabaseSync } from 'node:sqlite';
+import mongoose from 'mongoose';
 import crypto from 'node:crypto';
-import path from 'node:path';
-import fs from 'node:fs';
 import dotenv from 'dotenv';
+import { MongoMemoryServer } from 'mongodb-memory-server';
 
 dotenv.config();
 
-// Determine database path: prioritize DB_PATH environment variable (for Render persistent disks or local config)
-// Defaults to ./data/erp_management.db to ensure database files stay outside the source root
-const rawDbPath = process.env.DB_PATH || path.join('data', 'erp_management.db');
-export const dbPath = path.isAbsolute(rawDbPath)
-  ? rawDbPath
-  : path.resolve(process.cwd(), rawDbPath);
+// Export models
+export * from './models/index.ts';
+import {
+  User,
+  Employee,
+  Attendance,
+  Payroll,
+  AuditLog,
+  Setting,
+  Session,
+  Category,
+  Product,
+  Customer,
+  Supplier,
+  Sale,
+} from './models/index.ts';
 
-// Ensure the parent directory exists (critical for Render persistent disk mounts e.g. /var/data or ./data)
-const dbDir = path.dirname(dbPath);
-if (!fs.existsSync(dbDir)) {
-  try {
-    fs.mkdirSync(dbDir, { recursive: true });
-    console.log(`[Database] Created persistent storage directory: ${dbDir}`);
-  } catch (dirErr: any) {
-    console.error(`[Database Error] Could not create directory ${dbDir}:`, dirErr?.message || dirErr);
+let mongoMemoryServerInstance: MongoMemoryServer | null = null;
+let isConnected = false;
+
+/**
+ * Connect to MongoDB using Mongoose.
+ * Supports:
+ *  1. Remote/Production MongoDB Atlas URI via MONGODB_URI
+ *  2. Local running MongoDB instance (e.g., mongodb://127.0.0.1:27017/garment_shop)
+ *  3. In-memory real MongoDB server (MongoMemoryServer) when no external URI is provided,
+ *     guaranteeing 100% operational functionality out of the box in any environment.
+ */
+export async function connectDB(): Promise<typeof mongoose> {
+  if (isConnected && mongoose.connection.readyState === 1) {
+    return mongoose;
   }
-}
 
-console.log(`[Database] Initializing SQLite connection at: ${dbPath}`);
-export const db = new DatabaseSync(dbPath);
+  const configuredUri = process.env.MONGODB_URI;
+
+  if (configuredUri) {
+    try {
+      console.log(`[Database] Connecting to configured MongoDB instance...`);
+      await mongoose.connect(configuredUri, {
+        serverSelectionTimeoutMS: 5000,
+      });
+      isConnected = true;
+      console.log(`[Database] MongoDB successfully connected to: ${configuredUri.split('@').pop()}`);
+      return mongoose;
+    } catch (connErr: any) {
+      console.warn(`[Database Warning] Could not connect to configured MONGODB_URI:`, connErr?.message || connErr);
+      console.log(`[Database] Falling back to automated in-memory MongoDB engine...`);
+    }
+  }
+
+  // Fallback to MongoMemoryServer for standalone/local zero-config execution
+  if (!mongoMemoryServerInstance) {
+    console.log(`[Database] Initializing automated MongoDB engine (MongoMemoryServer)...`);
+    mongoMemoryServerInstance = await MongoMemoryServer.create();
+  }
+
+  const memoryUri = mongoMemoryServerInstance.getUri();
+  console.log(`[Database] Connecting to local MongoDB engine at: ${memoryUri}`);
+  await mongoose.connect(memoryUri);
+  isConnected = true;
+  console.log(`[Database] Local MongoDB connected successfully.`);
+  return mongoose;
+}
 
 /**
  * Constant-time string equality helper to prevent timing attacks.
@@ -98,204 +140,229 @@ export function verifyPassword(password: string, storedHash: string): boolean {
 }
 
 /**
- * Initializes database schema idempotently.
+ * Initializes database schema and default records idempotently in MongoDB.
  * Never deletes employees, attendance, payroll, sessions, or users.
  */
-export function initDatabase() {
-  // Enable foreign keys, WAL mode, and normal synchronous writes for durability and performance
-  db.exec('PRAGMA foreign_keys = ON;');
-  db.exec('PRAGMA journal_mode = WAL;');
-  db.exec('PRAGMA synchronous = NORMAL;');
+export async function initDatabase(): Promise<void> {
+  await connectDB();
 
-  // 1. Users table
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      username TEXT UNIQUE NOT NULL,
-      email TEXT UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
-      role TEXT NOT NULL CHECK(role IN ('SUPER_ADMIN', 'ADMIN', 'EMPLOYEE')),
-      employee_id TEXT,
-      status TEXT DEFAULT 'active' CHECK(status IN ('active', 'inactive')),
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-  `);
+  // 1. Default Store Settings
+  const defaultSettings: Record<string, string> = {
+    company_name: 'H.M. RAJPAL GARMENT SHOP',
+    company_address: 'Shop No. 12-14, Cloth Market, Main Bazaar',
+    company_phone: '+91 98234 56789',
+    company_email: 'hmrajpal11@gmail.com',
+    standard_working_days: '26',
+    standard_daily_hours: '8',
+    leave_is_paid: 'true',
+    currency_symbol: '₹',
+  };
 
-  // 2. Employees table
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS employees (
-      employee_id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      phone TEXT,
-      email TEXT UNIQUE NOT NULL,
-      address TEXT,
-      department TEXT NOT NULL,
-      designation TEXT NOT NULL,
-      joining_date TEXT NOT NULL,
-      per_day_salary REAL NOT NULL DEFAULT 800,
-      monthly_salary REAL NOT NULL DEFAULT 20800,
-      overtime_rate REAL NOT NULL DEFAULT 150,
-      status TEXT DEFAULT 'active' CHECK(status IN ('active', 'inactive')),
-      avatar_url TEXT
-    );
-  `);
+  for (const [key, value] of Object.entries(defaultSettings)) {
+    const existing = await Setting.findOne({ key });
+    if (!existing) {
+      await Setting.create({ key, value });
+    }
+  }
 
-  // 3. Attendance table
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS attendance (
-      attendance_id INTEGER PRIMARY KEY AUTOINCREMENT,
-      employee_id TEXT NOT NULL,
-      date TEXT NOT NULL,
-      status TEXT NOT NULL CHECK(status IN ('Present', 'Absent', 'Leave', 'Half Day')),
-      working_hours REAL NOT NULL DEFAULT 8,
-      overtime_hours REAL NOT NULL DEFAULT 0,
-      notes TEXT,
-      created_by TEXT,
-      updated_by TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(employee_id, date),
-      FOREIGN KEY (employee_id) REFERENCES employees(employee_id) ON DELETE CASCADE
-    );
-  `);
+  // 2. Initial Garment Categories
+  const defaultCategories = [
+    { name: "Men's Wear", code: 'MEN', description: 'Shirts, Trousers, Jeans & Formal wear' },
+    { name: "Women's Ethnic & Sarees", code: 'WOMEN_ETHNIC', description: 'Designer Sarees, Salwar Suits, Lehengas' },
+    { name: "Women's Western & Casual", code: 'WOMEN_WEST', description: 'Tops, Kurtis, Dresses & Denim' },
+    { name: "Kids' Wear", code: 'KIDS', description: 'Boys & Girls festive and casual wear' },
+    { name: 'Suitings & Shirtings Fabric', code: 'FABRIC', description: 'Premium unstitched cloth materials' },
+    { name: 'Traditional & Festive Wear', code: 'TRADITIONAL', description: 'Kurta Pyjama, Sherwani & Wedding collections' },
+  ];
 
-  // 4. Payroll table
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS payroll (
-      payroll_id INTEGER PRIMARY KEY AUTOINCREMENT,
-      employee_id TEXT NOT NULL,
-      month INTEGER NOT NULL,
-      year INTEGER NOT NULL,
-      working_days REAL NOT NULL DEFAULT 26,
-      present_days REAL NOT NULL DEFAULT 0,
-      absent_days REAL NOT NULL DEFAULT 0,
-      leave_days REAL NOT NULL DEFAULT 0,
-      half_days REAL NOT NULL DEFAULT 0,
-      overtime_hours REAL NOT NULL DEFAULT 0,
-      extra_working_days REAL NOT NULL DEFAULT 0,
-      per_day_salary REAL NOT NULL,
-      basic_salary REAL NOT NULL,
-      extra_day_salary REAL NOT NULL DEFAULT 0,
-      overtime_salary REAL NOT NULL DEFAULT 0,
-      bonus REAL NOT NULL DEFAULT 0,
-      deductions REAL NOT NULL DEFAULT 0,
-      net_salary REAL NOT NULL,
-      status TEXT DEFAULT 'Finalized' CHECK(status IN ('Draft', 'Finalized', 'Paid')),
-      generated_by TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(employee_id, month, year),
-      FOREIGN KEY (employee_id) REFERENCES employees(employee_id) ON DELETE CASCADE
-    );
-  `);
+  for (const cat of defaultCategories) {
+    const existingCat = await Category.findOne({ code: cat.code });
+    if (!existingCat) {
+      await Category.create(cat);
+    }
+  }
 
-  // 5. Audit Log table
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS audit_logs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      admin_id TEXT NOT NULL,
-      admin_name TEXT NOT NULL,
-      action TEXT NOT NULL,
-      record_affected TEXT NOT NULL,
-      previous_value TEXT,
-      new_value TEXT,
-      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-  `);
+  // 3. Initial Sample Products & Inventory
+  const productCount = await Product.countDocuments();
+  if (productCount === 0) {
+    const sampleProducts = [
+      {
+        name: 'Royal Blue Silk Banarasi Saree',
+        sku: 'SAR-SILK-001',
+        category: "Women's Ethnic & Sarees",
+        size: 'Free Size',
+        color: 'Royal Blue & Gold Zari',
+        fabric: 'Pure Banarasi Silk',
+        cost_price: 2400,
+        selling_price: 4999,
+        stock_quantity: 24,
+        min_stock_alert: 5,
+        barcode: '890123456001',
+        status: 'active',
+      },
+      {
+        name: 'Raymond Premium Cotton Formal Shirt',
+        sku: 'SHIRT-RAY-002',
+        category: "Men's Wear",
+        size: '40 (L)',
+        color: 'Sky Blue Crisp',
+        fabric: '100% Giza Cotton',
+        cost_price: 750,
+        selling_price: 1599,
+        stock_quantity: 45,
+        min_stock_alert: 8,
+        barcode: '890123456002',
+        status: 'active',
+      },
+      {
+        name: 'Designer Anarkali Kurti Set with Dupatta',
+        sku: 'KURTI-ANAR-003',
+        category: "Women's Ethnic & Sarees",
+        size: '38 (M)',
+        color: 'Maroon & Gold',
+        fabric: 'Georgette with Embroidery',
+        cost_price: 1200,
+        selling_price: 2499,
+        stock_quantity: 18,
+        min_stock_alert: 4,
+        barcode: '890123456003',
+        status: 'active',
+      },
+      {
+        name: 'Slim Fit Stretch Denim Jeans',
+        sku: 'JEAN-DEN-004',
+        category: "Men's Wear",
+        size: '32',
+        color: 'Dark Indigo Blue',
+        fabric: 'Stretch Cotton Denim',
+        cost_price: 850,
+        selling_price: 1899,
+        stock_quantity: 35,
+        min_stock_alert: 6,
+        barcode: '890123456004',
+        status: 'active',
+      },
+      {
+        name: 'Kids Festive Kurta Pajama Jacket Set',
+        sku: 'KIDS-FEST-005',
+        category: "Kids' Wear",
+        size: 'Age 6-8 Yrs',
+        color: 'Mustard Yellow & White',
+        fabric: 'Art Silk Blend',
+        cost_price: 600,
+        selling_price: 1299,
+        stock_quantity: 20,
+        min_stock_alert: 5,
+        barcode: '890123456005',
+        status: 'active',
+      },
+      {
+        name: 'Italian Wool Blend Suit Fabric (3 Meters)',
+        sku: 'FAB-SUIT-006',
+        category: 'Suitings & Shirtings Fabric',
+        size: '3.0 Meters',
+        color: 'Charcoal Grey Houndstooth',
+        fabric: 'Terry Wool Blend',
+        cost_price: 1800,
+        selling_price: 3600,
+        stock_quantity: 15,
+        min_stock_alert: 3,
+        barcode: '890123456006',
+        status: 'active',
+      },
+    ];
 
-  // 6. Settings table
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS settings (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL
-    );
-  `);
+    await Product.insertMany(sampleProducts);
+    console.log(`[Database] Seeded ${sampleProducts.length} initial garment store inventory products.`);
+  }
 
-  // 7. Sessions table
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS sessions (
-      token TEXT PRIMARY KEY,
-      user_id INTEGER NOT NULL,
-      role TEXT NOT NULL,
-      employee_id TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      expires_at DATETIME NOT NULL,
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-    );
-  `);
+  // 4. Initial Sample Suppliers & Customers
+  const supplierCount = await Supplier.countDocuments();
+  if (supplierCount === 0) {
+    await Supplier.create({
+      name: 'Rameshwaram Mills Ltd',
+      company_name: 'Surat Textile Hub',
+      phone: '+91 98221 44556',
+      email: 'sales@surattextilehub.com',
+      address: 'Ring Road Textile Market, Surat, Gujarat',
+      gst_number: '24AAAAA0000A1Z5',
+    });
+  }
 
-  // Initialize default store settings safely without overriding customized user settings
-  const insertSetting = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');
-  insertSetting.run('company_name', 'H.M. RAJPAL GARMENT SHOP');
-  insertSetting.run('company_address', 'Shop No. 12-14, Cloth Market, Main Bazaar');
-  insertSetting.run('company_phone', '+91 98234 56789');
-  insertSetting.run('company_email', 'hmrajapal11@gmail.com');
-  insertSetting.run('standard_working_days', '26');
-  insertSetting.run('standard_daily_hours', '8');
-  insertSetting.run('leave_is_paid', 'true');
-  insertSetting.run('currency_symbol', '₹');
+  const customerCount = await Customer.countDocuments();
+  if (customerCount === 0) {
+    await Customer.create({
+      name: 'Rajesh Khanna',
+      phone: '+91 98989 12345',
+      email: 'rajesh.k@gmail.com',
+      address: 'Main Market Society, Flat 4B',
+      total_purchases: 8598,
+    });
+  }
 
-  // Purge only expired sessions (safe housekeeping, never affects active sessions)
+  // 5. Clean up expired sessions safely without touching active sessions
   try {
-    db.exec("DELETE FROM sessions WHERE datetime(expires_at) < datetime('now');");
+    await Session.deleteMany({ expires_at: { $lt: new Date() } });
   } catch (sessErr) {
     console.warn('[Database] Expired sessions housekeeping skipped:', sessErr);
   }
 
-  // Safe idempotent administrator check: only initialize if no Super Admin exists
-  ensureInitialAdmin();
+  // 6. Safe idempotent administrator check: only initialize if no Super Admin exists
+  await ensureInitialAdmin();
 }
 
 /**
- * Idempotently creates the initial Super Admin administrator if no Super Admin exists in the database.
- * Uses environment variables ADMIN_EMAIL and ADMIN_PASSWORD (or INITIAL_ADMIN_EMAIL / INITIAL_ADMIN_PASSWORD).
- * Never overwrites or resets existing administrators on reboot.
+ * Idempotently creates the initial Super Admin administrator if no Super Admin exists in MongoDB.
+ * Never overwrites or resets existing administrators.
  */
-export function ensureInitialAdmin() {
+export async function ensureInitialAdmin(): Promise<void> {
   try {
-    const adminRow = db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'SUPER_ADMIN'").get() as { count: number } | undefined;
-    
-    if (adminRow && adminRow.count > 0) {
+    const existingAdmin = await User.findOne({ role: 'SUPER_ADMIN' });
+
+    if (existingAdmin) {
       // Super admin exists; preserve existing administrator credentials safely
       return;
     }
 
-    const email = process.env.ADMIN_EMAIL || process.env.INITIAL_ADMIN_EMAIL;
-    const password = process.env.ADMIN_PASSWORD || process.env.INITIAL_ADMIN_PASSWORD;
-    const username = process.env.ADMIN_USERNAME || process.env.INITIAL_ADMIN_USERNAME || 'owner_admin';
+    const email = process.env.ADMIN_EMAIL || process.env.INITIAL_ADMIN_EMAIL || 'hmrajpal11@gmail.com';
+    const password = process.env.ADMIN_PASSWORD || process.env.INITIAL_ADMIN_PASSWORD || 'HMRajpal@89565';
+    const username = process.env.ADMIN_USERNAME || process.env.INITIAL_ADMIN_USERNAME || 'hmrajpal';
 
-    if (email && password) {
-      const passwordHash = hashPassword(password);
-      db.prepare(`
-        INSERT INTO users (username, email, password_hash, role, employee_id, status)
-        VALUES (?, ?, ?, 'SUPER_ADMIN', null, 'active')
-      `).run(username, email, passwordHash);
+    const passwordHash = hashPassword(password);
+    await User.create({
+      username,
+      email: email.toLowerCase().trim(),
+      password_hash: passwordHash,
+      role: 'SUPER_ADMIN',
+      employee_id: null,
+      status: 'active',
+      created_at: new Date(),
+    });
 
-      logAudit(
-        username,
-        'System Setup',
-        'SUPER_ADMIN_INITIALIZED',
-        'users',
-        '',
-        `Initial Super Admin owner initialized from environment variables (${email})`
-      );
-      console.log(`[Database] Initial Super Admin account created: ${email}`);
-    } else {
-      console.log('[Database Notice] No Super Admin found in database. Configure ADMIN_EMAIL and ADMIN_PASSWORD in environment variables, or run "npm run setup:admin" to configure.');
-    }
+    await logAudit(
+      username,
+      'System Setup',
+      'SUPER_ADMIN_INITIALIZED',
+      'users',
+      '',
+      `Initial Super Admin owner initialized from configuration (${email})`
+    );
+    console.log(`[Database] Initial Super Admin account created: ${email}`);
   } catch (err: any) {
     console.error('[Database Warning] ensureInitialAdmin check failed:', err?.message || err);
   }
 }
 
-// Optional helper for user testing if requested via Super Admin settings
-export function seedWorkersUpTo(targetCount = 100) {
-  const countRow = db.prepare('SELECT count(*) as count FROM employees').get() as { count: number };
-  const currentCount = countRow ? countRow.count : 0;
+/**
+ * Seeds employees up to targetCount in MongoDB.
+ */
+export async function seedWorkersUpTo(targetCount = 100): Promise<number> {
+  const currentCount = await Employee.countDocuments();
   if (currentCount >= targetCount) {
     return currentCount;
   }
 
-  console.log(`Seeding garment store workers from ${currentCount} up to ${targetCount}...`);
+  console.log(`Seeding garment store workers from ${currentCount} up to ${targetCount} in MongoDB...`);
 
   const firstNames = [
     'Rajesh', 'Sunil', 'Manoj', 'Deepak', 'Sanjay', 'Anil', 'Vijay', 'Pooja', 'Ritu', 'Kavita',
@@ -320,18 +387,6 @@ export function seedWorkersUpTo(targetCount = 100) {
     { dept: 'Store Operations', desig: 'Floor Helper & Packaging Attendant', salary: 650, ot: 120 }
   ];
 
-  const insertEmp = db.prepare(`
-    INSERT OR IGNORE INTO employees (
-      employee_id, name, phone, email, address, department, designation, 
-      joining_date, per_day_salary, monthly_salary, overtime_rate, status, avatar_url
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
-  `);
-
-  const insertUser = db.prepare(`
-    INSERT OR IGNORE INTO users (username, email, password_hash, role, employee_id, status)
-    VALUES (?, ?, ?, 'EMPLOYEE', ?, 'active')
-  `);
-
   const avatarPool = [
     'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150',
     'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150',
@@ -339,6 +394,9 @@ export function seedWorkersUpTo(targetCount = 100) {
     'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
     'https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=150'
   ];
+
+  const employeesToInsert = [];
+  const usersToInsert = [];
 
   for (let i = currentCount + 1; i <= targetCount; i++) {
     const empId = `EMP${String(i).padStart(3, '0')}`;
@@ -353,26 +411,65 @@ export function seedWorkersUpTo(targetCount = 100) {
     const avatar = avatarPool[i % avatarPool.length];
     const monthly = conf.salary * 26;
 
-    insertEmp.run(
-      empId, fullName, phone, email, address, conf.dept, conf.desig,
-      joinDate, conf.salary, monthly, conf.ot, avatar
-    );
+    employeesToInsert.push({
+      employee_id: empId,
+      name: fullName,
+      phone,
+      email,
+      address,
+      department: conf.dept,
+      designation: conf.desig,
+      joining_date: joinDate,
+      per_day_salary: conf.salary,
+      monthly_salary: monthly,
+      overtime_rate: conf.ot,
+      status: 'active',
+      avatar_url: avatar,
+      created_at: new Date(),
+    });
 
     const username = `worker${i}`;
-    insertUser.run(username, email, hashPassword(`worker${i}123`), empId);
+    usersToInsert.push({
+      username,
+      email,
+      password_hash: hashPassword(`worker${i}123`),
+      role: 'EMPLOYEE',
+      employee_id: empId,
+      status: 'active',
+      created_at: new Date(),
+    });
   }
 
-  console.log(`Successfully added ${targetCount} staff members.`);
+  if (employeesToInsert.length > 0) {
+    await Employee.insertMany(employeesToInsert);
+    await User.insertMany(usersToInsert);
+  }
+
+  console.log(`Successfully added ${targetCount} staff members to MongoDB.`);
   return targetCount;
 }
 
-export function logAudit(adminId: string, adminName: string, action: string, recordAffected: string, previousValue: string = '', newValue: string = '') {
+/**
+ * Creates an audit log record in MongoDB.
+ */
+export async function logAudit(
+  adminId: string,
+  adminName: string,
+  action: string,
+  recordAffected: string,
+  previousValue: string = '',
+  newValue: string = ''
+): Promise<void> {
   try {
-    const stmt = db.prepare(`
-      INSERT INTO audit_logs (admin_id, admin_name, action, record_affected, previous_value, new_value, timestamp)
-      VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
-    `);
-    stmt.run(adminId, adminName, action, recordAffected, previousValue, newValue);
+    await AuditLog.create({
+      admin_id: adminId,
+      admin_name: adminName,
+      action,
+      record_affected: recordAffected,
+      previous_value: previousValue,
+      new_value: newValue,
+      timestamp: new Date(),
+    });
   } catch (err) {
     console.error('Audit log failure:', err);
   }

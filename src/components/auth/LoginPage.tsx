@@ -1,11 +1,10 @@
 import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { 
-  Building2, Lock, Mail, Eye, EyeOff, ShieldCheck, 
-  ArrowRight, KeyRound, AlertCircle, CheckCircle2,
-  Smartphone, Monitor, Download
+  Lock, Mail, Eye, EyeOff, ShieldCheck, 
+  ArrowRight, KeyRound, AlertCircle, CheckCircle2
 } from 'lucide-react';
-import { PWAInstallButton } from '../common/PWAInstallButton.tsx';
+
 
 export const LoginPage: React.FC = () => {
   const { login, error, clearError, isLoading } = useAuth();
@@ -51,11 +50,6 @@ export const LoginPage: React.FC = () => {
       {/* Decorative background grid and ambient lighting */}
       <div className="absolute inset-0 bg-[linear-gradient(to_right,#1e293b15_1px,transparent_1px),linear-gradient(to_bottom,#1e293b15_1px,transparent_1px)] bg-[size:4rem_4rem] pointer-events-none" />
       <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-amber-500/10 rounded-full blur-3xl pointer-events-none" />
-      
-      {/* Top Bar with Android / Windows Install App prompt */}
-      <div className="absolute top-4 right-4 sm:top-6 sm:right-6 z-20">
-        <PWAInstallButton variant="header" />
-      </div>
 
       <div className="sm:mx-auto sm:w-full sm:max-w-md relative z-10 text-center">
         {/* Luxury Brand Crown Header */}
@@ -184,21 +178,6 @@ export const LoginPage: React.FC = () => {
               </button>
             </div>
           </form>
-
-          {/* Android & Windows Native App Installation Box */}
-          <div className="mt-6 pt-5 border-t border-slate-800 text-center">
-            <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800/80 flex items-center justify-between gap-3">
-              <div className="text-left min-w-0">
-                <span className="text-[11px] font-bold text-slate-200 block truncate">
-                  Android &amp; Windows Ready
-                </span>
-                <span className="text-[10px] text-slate-400 block truncate">
-                  Install as a standalone application
-                </span>
-              </div>
-              <PWAInstallButton variant="minimal" />
-            </div>
-          </div>
         </div>
 
         {/* Security & RBAC Guarantee */}

@@ -7,12 +7,12 @@ import { PayrollManagement } from './PayrollManagement.tsx';
 import { ReportsManagement } from './ReportsManagement.tsx';
 import { SettingsManagement } from './SettingsManagement.tsx';
 import { AuditLogsView } from './AuditLogsView.tsx';
+import { InventoryBillingManagement } from './InventoryBillingManagement.tsx';
 import { 
   Building2, LayoutDashboard, Users, CalendarCheck2, 
   DollarSign, BarChart3, Settings, ShieldAlert, LogOut, 
-  Menu, X, ShieldCheck
+  Menu, X, ShieldCheck, ShoppingBag
 } from 'lucide-react';
-import { PWAInstallButton } from '../common/PWAInstallButton.tsx';
 
 export const AdminPortal: React.FC = () => {
   const { user, logout } = useAuth();
@@ -21,6 +21,7 @@ export const AdminPortal: React.FC = () => {
 
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { id: 'inventory-pos', label: 'Store & POS Billing', icon: ShoppingBag },
     { id: 'employees', label: 'Employees', icon: Users },
     { id: 'attendance', label: 'Attendance', icon: CalendarCheck2 },
     { id: 'payroll', label: 'Payroll', icon: DollarSign },
@@ -43,7 +44,6 @@ export const AdminPortal: React.FC = () => {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <PWAInstallButton variant="header" />
           <button
             onClick={() => setIsSidebarOpen(!isSidebarOpen)}
             className="p-2 text-slate-300 hover:text-white"
@@ -113,10 +113,6 @@ export const AdminPortal: React.FC = () => {
             </div>
           </div>
 
-          <div className="mb-2">
-            <PWAInstallButton variant="hero" className="w-full text-center" />
-          </div>
-
           <button
             id="admin-logout-btn"
             onClick={logout}
@@ -131,6 +127,7 @@ export const AdminPortal: React.FC = () => {
       {/* Main Admin Workspace View */}
       <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8">
         {activeTab === 'dashboard' && <AdminDashboard onNavigate={setActiveTab} />}
+        {activeTab === 'inventory-pos' && <InventoryBillingManagement />}
         {activeTab === 'employees' && <EmployeeManagement />}
         {activeTab === 'attendance' && <AttendanceManagement />}
         {activeTab === 'payroll' && <PayrollManagement />}

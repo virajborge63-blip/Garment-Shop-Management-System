@@ -1,9 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
 import crypto from 'node:crypto';
-import { db } from './db.ts';
+import { User, Employee, Session } from './db.ts';
 
 export interface AuthenticatedUser {
-  id: number;
+  id: string | number;
   username: string;
   email: string;
   role: 'SUPER_ADMIN' | 'ADMIN' | 'EMPLOYEE';
@@ -23,21 +23,24 @@ export function createSessionToken(): string {
   return crypto.randomBytes(32).toString('hex');
 }
 
-// Create a new session in database
-export function createSession(userId: number, role: string, employeeId: string | null): string {
+// Create a new session in MongoDB
+export async function createSession(userId: string | number, role: string, employeeId: string | null): Promise<string> {
   const token = createSessionToken();
-  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
-  const stmt = db.prepare(`
-    INSERT INTO sessions (token, user_id, role, employee_id, expires_at)
-    VALUES (?, ?, ?, ?, ?)
-  `);
-  stmt.run(token, userId, role, employeeId, expiresAt);
+  await Session.create({
+    token,
+    user_id: String(userId),
+    role,
+    employee_id: employeeId || null,
+    expires_at: expiresAt,
+  });
+
   return token;
 }
 
 // Middleware: Authenticate user from Bearer token
-export function authenticateToken(req: AuthRequest, res: Response, next: NextFunction) {
+export async function authenticateToken(req: AuthRequest, res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Unauthorized: Missing or invalid authentication token.' });
@@ -49,43 +52,46 @@ export function authenticateToken(req: AuthRequest, res: Response, next: NextFun
   }
 
   try {
-    const sessionStmt = db.prepare(`
-      SELECT s.token, s.user_id, s.role, s.employee_id, s.expires_at,
-             u.username, u.email, u.status as user_status,
-             e.name, e.department, e.designation, e.avatar_url
-      FROM sessions s
-      JOIN users u ON s.user_id = u.id
-      LEFT JOIN employees e ON s.employee_id = e.employee_id
-      WHERE s.token = ? AND datetime(s.expires_at) > datetime('now')
-    `);
-
-    const session = sessionStmt.get(token) as any;
+    const session = await Session.findOne({
+      token,
+      expires_at: { $gt: new Date() },
+    });
 
     if (!session) {
       return res.status(401).json({ error: 'Unauthorized: Session expired or invalid.' });
     }
 
-    if (session.user_status !== 'active') {
+    const user = await User.findById(session.user_id);
+    if (!user) {
+      return res.status(401).json({ error: 'Unauthorized: User account not found.' });
+    }
+
+    if (user.status !== 'active') {
       return res.status(403).json({ error: 'Account has been deactivated.' });
     }
 
-    let displayName = session.name;
-    if (session.role === 'SUPER_ADMIN') {
+    let employee = null;
+    if (session.employee_id) {
+      employee = await Employee.findOne({ employee_id: session.employee_id });
+    }
+
+    let displayName = employee?.name;
+    if (user.role === 'SUPER_ADMIN') {
       displayName = 'H.M. Rajpal (Owner)';
-    } else if (session.role === 'ADMIN') {
-      displayName = session.name || 'Store Operations Admin';
+    } else if (user.role === 'ADMIN') {
+      displayName = employee?.name || user.username || 'Store Operations Admin';
     }
 
     req.user = {
-      id: session.user_id,
-      username: session.username,
-      email: session.email,
-      role: session.role,
-      employee_id: session.employee_id,
+      id: user._id.toString(),
+      username: user.username,
+      email: user.email,
+      role: user.role,
+      employee_id: user.employee_id,
       name: displayName,
-      department: session.role === 'SUPER_ADMIN' ? 'Executive Board / Ownership' : session.department,
-      designation: session.role === 'SUPER_ADMIN' ? 'Store Owner & Super Admin' : session.designation,
-      avatar_url: session.avatar_url || (session.role === 'SUPER_ADMIN' ? 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80' : undefined),
+      department: user.role === 'SUPER_ADMIN' ? 'Executive Board / Ownership' : employee?.department,
+      designation: user.role === 'SUPER_ADMIN' ? 'Store Owner & Super Admin' : employee?.designation,
+      avatar_url: employee?.avatar_url || (user.role === 'SUPER_ADMIN' ? 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80' : undefined),
     };
 
     next();

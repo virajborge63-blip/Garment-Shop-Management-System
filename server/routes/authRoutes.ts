@@ -1,13 +1,14 @@
 import { Router, Request, Response } from 'express';
-import { db, hashPassword, verifyPassword, logAudit } from '../db.ts';
+import { User, Employee, Session, hashPassword, verifyPassword, logAudit } from '../db.ts';
 import { createSession, authenticateToken, AuthRequest } from '../auth.ts';
 
 const router = Router();
 
 // 1. User Login
-router.post('/login', (req: Request, res: Response) => {
+router.post('/login', async (req: Request, res: Response) => {
   try {
-    const { identifier, password } = req.body;
+    const identifier = req.body.identifier || req.body.login || req.body.username || req.body.email;
+    const password = req.body.password;
 
     if (!identifier || !password) {
       return res.status(400).json({ error: 'Username/Email and password are required.' });
@@ -24,16 +25,15 @@ router.post('/login', (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Credentials must be within valid length limits.' });
     }
 
-    // Look up user by username, email, or linked employee_id
-    const userStmt = db.prepare(`
-      SELECT u.id, u.username, u.email, u.password_hash, u.role, u.employee_id, u.status,
-             e.name, e.department, e.designation, e.avatar_url
-      FROM users u
-      LEFT JOIN employees e ON u.employee_id = e.employee_id
-      WHERE LOWER(u.username) = LOWER(?) OR LOWER(u.email) = LOWER(?) OR UPPER(u.employee_id) = UPPER(?)
-    `);
-
-    const user = userStmt.get(trimmedId, trimmedId, trimmedId) as any;
+    // Look up user by username, email, or linked employee_id (case-insensitive)
+    const idRegex = new RegExp(`^${trimmedId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+    const user = await User.findOne({
+      $or: [
+        { username: idRegex },
+        { email: idRegex },
+        { employee_id: trimmedId.toUpperCase() },
+      ],
+    });
 
     if (!user) {
       return res.status(401).json({ error: 'Invalid credentials. User not found.' });
@@ -52,41 +52,47 @@ router.post('/login', (req: Request, res: Response) => {
     if (!user.password_hash.startsWith('scrypt$')) {
       try {
         const upgradedHash = hashPassword(cleanPass);
-        db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(upgradedHash, user.id);
+        user.password_hash = upgradedHash;
+        await user.save();
         console.log(`[Security] Upgraded legacy password hash to scrypt for user: ${user.username}`);
       } catch (upgradeErr) {
         console.warn('[Security Notice] Could not upgrade legacy password hash:', upgradeErr);
       }
     }
 
-    // Create session
-    const token = createSession(user.id, user.role, user.employee_id);
+    // Create session in MongoDB
+    const token = await createSession(user._id.toString(), user.role, user.employee_id);
 
-    if (user.role === 'SUPER_ADMIN') {
-      logAudit(user.username, 'H.M. Rajpal (Owner)', 'SUPER_ADMIN_LOGIN', 'Owner Console', '', 'Store Owner logged in successfully');
-    } else if (user.role === 'ADMIN') {
-      logAudit(user.username, user.name || 'Store Manager', 'ADMIN_LOGIN', 'Admin Portal', '', 'Logged in successfully');
+    let employee = null;
+    if (user.employee_id) {
+      employee = await Employee.findOne({ employee_id: user.employee_id });
     }
 
-    let displayName = user.name;
+    if (user.role === 'SUPER_ADMIN') {
+      await logAudit(user.username, 'H.M. Rajpal (Owner)', 'SUPER_ADMIN_LOGIN', 'Owner Console', '', 'Store Owner logged in successfully');
+    } else if (user.role === 'ADMIN') {
+      await logAudit(user.username, employee?.name || user.username || 'Store Manager', 'ADMIN_LOGIN', 'Admin Portal', '', 'Logged in successfully');
+    }
+
+    let displayName = employee?.name;
     if (user.role === 'SUPER_ADMIN') {
       displayName = 'H.M. Rajpal (Owner)';
     } else if (user.role === 'ADMIN') {
-      displayName = user.name || 'Store Manager';
+      displayName = employee?.name || user.username || 'Store Manager';
     }
 
     return res.json({
       token,
       user: {
-        id: user.id,
+        id: user._id.toString(),
         username: user.username,
         email: user.email,
         role: user.role,
         employee_id: user.employee_id,
         name: displayName,
-        department: user.role === 'SUPER_ADMIN' ? 'Executive Board / Ownership' : user.department,
-        designation: user.role === 'SUPER_ADMIN' ? 'Store Owner & Super Admin' : user.designation,
-        avatar_url: user.avatar_url,
+        department: user.role === 'SUPER_ADMIN' ? 'Executive Board / Ownership' : employee?.department,
+        designation: user.role === 'SUPER_ADMIN' ? 'Store Owner & Super Admin' : employee?.designation,
+        avatar_url: employee?.avatar_url,
       }
     });
   } catch (err: any) {
@@ -96,7 +102,7 @@ router.post('/login', (req: Request, res: Response) => {
 });
 
 // 2. Protected Administrator Provisioning Endpoint
-router.post('/setup-admin', (req: Request, res: Response) => {
+router.post('/setup-admin', async (req: Request, res: Response) => {
   try {
     const { email, password, username, setupToken } = req.body;
 
@@ -124,8 +130,8 @@ router.post('/setup-admin', (req: Request, res: Response) => {
     }
 
     // Check existing Super Admin status
-    const adminCountRow = db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'SUPER_ADMIN'").get() as { count: number };
-    const hasExistingSuperAdmin = adminCountRow && adminCountRow.count > 0;
+    const adminCount = await User.countDocuments({ role: 'SUPER_ADMIN' });
+    const hasExistingSuperAdmin = adminCount > 0;
 
     const configuredSetupToken = process.env.SETUP_TOKEN;
 
@@ -145,23 +151,28 @@ router.post('/setup-admin', (req: Request, res: Response) => {
 
     const passwordHash = hashPassword(cleanPassword);
 
-    const existingUser = db.prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?)').get(trimmedEmail) as any;
+    const existingUser = await User.findOne({ email: trimmedEmail });
     if (existingUser) {
-      db.prepare(`
-        UPDATE users 
-        SET username = ?, password_hash = ?, role = 'SUPER_ADMIN', status = 'active'
-        WHERE id = ?
-      `).run(adminUsername, passwordHash, existingUser.id);
+      existingUser.username = adminUsername;
+      existingUser.password_hash = passwordHash;
+      existingUser.role = 'SUPER_ADMIN';
+      existingUser.status = 'active';
+      await existingUser.save();
 
-      logAudit(adminUsername, 'Setup API', 'SUPER_ADMIN_PASSWORD_RESET', 'users', '', `Authorized Super Admin password reset for ${trimmedEmail}`);
+      await logAudit(adminUsername, 'Setup API', 'SUPER_ADMIN_PASSWORD_RESET', 'users', '', `Authorized Super Admin password reset for ${trimmedEmail}`);
       return res.json({ success: true, message: 'Administrator credentials updated successfully.' });
     } else {
-      db.prepare(`
-        INSERT INTO users (username, email, password_hash, role, employee_id, status)
-        VALUES (?, ?, ?, 'SUPER_ADMIN', null, 'active')
-      `).run(adminUsername, trimmedEmail, passwordHash);
+      await User.create({
+        username: adminUsername,
+        email: trimmedEmail,
+        password_hash: passwordHash,
+        role: 'SUPER_ADMIN',
+        employee_id: null,
+        status: 'active',
+        created_at: new Date(),
+      });
 
-      logAudit(adminUsername, 'Setup API', 'SUPER_ADMIN_CREATED', 'users', '', `Created initial Super Admin for ${trimmedEmail}`);
+      await logAudit(adminUsername, 'Setup API', 'SUPER_ADMIN_CREATED', 'users', '', `Created initial Super Admin for ${trimmedEmail}`);
       return res.json({ success: true, message: 'Super Administrator created successfully.' });
     }
   } catch (err: any) {
@@ -176,12 +187,12 @@ router.get('/me', authenticateToken, (req: AuthRequest, res: Response) => {
 });
 
 // 4. Logout
-router.post('/logout', authenticateToken, (req: AuthRequest, res: Response) => {
+router.post('/logout', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const authHeader = req.headers.authorization;
     if (authHeader && authHeader.startsWith('Bearer ')) {
       const token = authHeader.split('Bearer ')[1].trim();
-      db.prepare('DELETE FROM sessions WHERE token = ?').run(token);
+      await Session.deleteOne({ token });
     }
     return res.json({ success: true, message: 'Logged out successfully.' });
   } catch (err) {

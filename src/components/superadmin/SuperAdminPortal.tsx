@@ -8,12 +8,12 @@ import { PayrollManagement } from '../admin/PayrollManagement.tsx';
 import { ReportsManagement } from '../admin/ReportsManagement.tsx';
 import { SettingsManagement } from '../admin/SettingsManagement.tsx';
 import { AuditLogsView } from '../admin/AuditLogsView.tsx';
+import { InventoryBillingManagement } from '../admin/InventoryBillingManagement.tsx';
 import { 
   Building2, LayoutDashboard, Users, CalendarCheck2, 
   DollarSign, BarChart3, Settings, ShieldAlert, LogOut, 
-  Menu, X, ShieldCheck, Crown, UserPlus, Sparkles, Download
+  Menu, X, ShieldCheck, Crown, UserPlus, Sparkles, Download, ShoppingBag
 } from 'lucide-react';
-import { PWAInstallButton } from '../common/PWAInstallButton.tsx';
 
 export const SuperAdminPortal: React.FC = () => {
   const { user, logout } = useAuth();
@@ -22,6 +22,7 @@ export const SuperAdminPortal: React.FC = () => {
 
   const navItems = [
     { id: 'overview', label: 'Executive Overview', icon: Crown, badge: 'Owner' },
+    { id: 'inventory-pos', label: 'Store & POS Billing', icon: ShoppingBag, badge: 'Retail' },
     { id: 'attendance', label: 'Line-by-Line Attendance', icon: CalendarCheck2, badge: '100+ Staff' },
     { id: 'employees', label: 'Workforce Directory', icon: Users },
     { id: 'payroll', label: 'Payroll & Salary Slips', icon: DollarSign },
@@ -45,7 +46,6 @@ export const SuperAdminPortal: React.FC = () => {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <PWAInstallButton variant="header" />
           <button
             onClick={() => setIsSidebarOpen(!isSidebarOpen)}
             className="p-2 text-slate-300 hover:text-white"
@@ -133,10 +133,6 @@ export const SuperAdminPortal: React.FC = () => {
             </div>
           </div>
 
-          <div className="mb-2">
-            <PWAInstallButton variant="hero" className="w-full text-center" />
-          </div>
-
           <button
             id="super-admin-logout-btn"
             onClick={logout}
@@ -151,6 +147,7 @@ export const SuperAdminPortal: React.FC = () => {
       {/* Main Owner Workspace View */}
       <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8">
         {activeTab === 'overview' && <SuperAdminOverview onNavigate={setActiveTab} />}
+        {activeTab === 'inventory-pos' && <InventoryBillingManagement />}
         {activeTab === 'attendance' && <AttendanceManagement />}
         {activeTab === 'employees' && <EmployeeManagement />}
         {activeTab === 'payroll' && <PayrollManagement />}

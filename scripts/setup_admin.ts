@@ -1,10 +1,11 @@
 import 'dotenv/config';
-import { db, initDatabase, hashPassword, logAudit } from '../server/db.ts';
+import mongoose from 'mongoose';
+import { User, initDatabase, hashPassword, logAudit } from '../server/db.ts';
 
 /**
- * CLI Administrator Setup & Credential Management Script
+ * CLI Administrator Setup & Credential Management Script (MongoDB)
  * 
- * Safely initializes the database schema before touching tables,
+ * Safely initializes the database schema before touching collections,
  * and restricts password reset operations to intentional, authorized actions.
  * 
  * Usage:
@@ -14,11 +15,11 @@ import { db, initDatabase, hashPassword, logAudit } from '../server/db.ts';
  *   ADMIN_EMAIL, ADMIN_PASSWORD, ADMIN_USERNAME, ALLOW_ADMIN_RESET
  */
 async function runSetup() {
-  // 1. Safely initialize database schema idempotently before accessing any tables
+  // 1. Safely initialize database schema idempotently
   try {
-    initDatabase();
+    await initDatabase();
   } catch (initErr: any) {
-    console.error('[FAILED] Could not initialize database schema safely:', initErr?.message || initErr);
+    console.error('[FAILED] Could not initialize database safely:', initErr?.message || initErr);
     process.exit(1);
   }
 
@@ -56,57 +57,68 @@ async function runSetup() {
   }
 
   const passwordHash = hashPassword(password);
+  const cleanEmail = email.toLowerCase().trim();
+  const cleanUsername = username.toLowerCase().trim();
 
   try {
-    const existing = db.prepare(
-      'SELECT id, username, email, role FROM users WHERE LOWER(email) = LOWER(?) OR LOWER(username) = LOWER(?)'
-    ).get(email, username) as any;
+    const existing = await User.findOne({
+      $or: [{ email: cleanEmail }, { username: cleanUsername }],
+    });
 
     if (existing) {
       if (!isResetRequested) {
-        console.log(`[NOTICE] Account with email "${email}" or username "${username}" already exists (ID: ${existing.id}, Current Role: ${existing.role}).`);
+        console.log(`[NOTICE] Account with email "${email}" or username "${username}" already exists (ID: ${existing._id}, Current Role: ${existing.role}).`);
         console.log('To intentionally reset or update credentials for this administrator, pass the --reset flag:');
         console.log(`  npm run setup:admin ${email} <new_password> [username] --reset`);
         console.log('Or set environment variable ALLOW_ADMIN_RESET=true.');
         console.log('Existing credentials and records remain unchanged.');
+        await mongoose.disconnect();
         process.exit(0);
       }
 
-      db.prepare(`
-        UPDATE users 
-        SET username = ?, email = ?, password_hash = ?, role = 'SUPER_ADMIN', status = 'active'
-        WHERE id = ?
-      `).run(username, email, passwordHash, existing.id);
+      existing.username = cleanUsername;
+      existing.email = cleanEmail;
+      existing.password_hash = passwordHash;
+      existing.role = 'SUPER_ADMIN';
+      existing.status = 'active';
+      await existing.save();
 
-      logAudit(
-        username,
+      await logAudit(
+        cleanUsername,
         'CLI Setup Tool',
         'SUPER_ADMIN_PASSWORD_RESET',
         'users',
         '',
-        `Authorized administrator password reset for ${email} (ID: ${existing.id})`
+        `Authorized administrator password reset for ${email} (ID: ${existing._id})`
       );
-      console.log(`[SUCCESS] Authorized administrator credential reset completed for ${email} (ID: ${existing.id}).`);
+      console.log(`[SUCCESS] Authorized administrator credential reset completed for ${email} (ID: ${existing._id}).`);
     } else {
-      db.prepare(`
-        INSERT INTO users (username, email, password_hash, role, employee_id, status)
-        VALUES (?, ?, ?, 'SUPER_ADMIN', null, 'active')
-      `).run(username, email, passwordHash);
+      const newUser = await User.create({
+        username: cleanUsername,
+        email: cleanEmail,
+        password_hash: passwordHash,
+        role: 'SUPER_ADMIN',
+        employee_id: null,
+        status: 'active',
+        created_at: new Date(),
+      });
 
-      logAudit(
-        username,
+      await logAudit(
+        cleanUsername,
         'CLI Setup Tool',
         'SUPER_ADMIN_CREATED',
         'users',
         '',
         `Initial Super Admin created for ${email}`
       );
-      console.log(`[SUCCESS] New Super Admin account created successfully for ${email}.`);
+      console.log(`[SUCCESS] New Super Admin account created successfully for ${email} (ID: ${newUser._id}).`);
     }
 
+    await mongoose.disconnect();
     process.exit(0);
   } catch (err: any) {
     console.error('[FAILED] Could not setup administrator:', err?.message || err);
+    await mongoose.disconnect().catch(() => {});
     process.exit(1);
   }
 }

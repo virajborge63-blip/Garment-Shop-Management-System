@@ -2,21 +2,22 @@ import 'dotenv/config';
 import express from 'express';
 import http from 'node:http';
 import path from 'path';
-import fs from 'fs';
+import mongoose from 'mongoose';
 import { createServer as createViteServer } from 'vite';
-import { initDatabase, db } from './server/db.ts';
+import { initDatabase } from './server/db.ts';
 import authRoutes from './server/routes/authRoutes.ts';
 import adminRoutes from './server/routes/adminRoutes.ts';
 import superAdminRoutes from './server/routes/superAdminRoutes.ts';
 import employeeRoutes from './server/routes/employeeRoutes.ts';
+import shopRoutes from './server/routes/shopRoutes.ts';
 
 async function startServer() {
   const app = express();
   const httpServer = http.createServer(app);
   const PORT = Number(process.env.PORT) || 3000;
 
-  // Initialize SQLite schema and safe idempotent database setup
-  initDatabase();
+  // Initialize MongoDB connection and safe idempotent database setup
+  await initDatabase();
 
   // Basic security & parsing
   app.disable('x-powered-by');
@@ -41,11 +42,12 @@ async function startServer() {
   // Health-check endpoint
   app.get('/api/health', (req, res) => {
     try {
-      const ping = db.prepare('SELECT 1 as ok').get() as { ok: number } | undefined;
+      const isDbConnected = mongoose.connection.readyState === 1;
       return res.json({
         status: 'ok',
         uptime: Math.round(process.uptime()),
-        database: ping?.ok === 1 ? 'connected' : 'degraded',
+        database: isDbConnected ? 'connected' : 'connecting',
+        engine: 'MongoDB',
         timestamp: new Date().toISOString()
       });
     } catch (err: any) {
@@ -58,6 +60,7 @@ async function startServer() {
   app.use('/api/super-admin', superAdminRoutes);
   app.use('/api/admin', adminRoutes);
   app.use('/api/employee', employeeRoutes);
+  app.use('/api/shop', shopRoutes);
 
   // Production vs Development mode detection
   const isProduction =
@@ -109,7 +112,7 @@ async function startServer() {
   });
 
   httpServer.listen(PORT, '0.0.0.0', () => {
-    console.log(`[Server] Garment Shop Management System listening at http://0.0.0.0:${PORT} (${isProduction ? 'production' : 'development'})`);
+    console.log(`[Server] Garment Shop Management System (MongoDB) listening at http://0.0.0.0:${PORT} (${isProduction ? 'production' : 'development'})`);
   });
 }
 

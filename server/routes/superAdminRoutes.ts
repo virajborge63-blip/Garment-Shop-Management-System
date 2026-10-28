@@ -1,5 +1,14 @@
 import { Router, Response } from 'express';
-import { db, logAudit, hashPassword, seedWorkersUpTo } from '../db.ts';
+import {
+  User,
+  Employee,
+  Attendance,
+  Setting,
+  AuditLog,
+  logAudit,
+  hashPassword,
+  seedWorkersUpTo,
+} from '../db.ts';
 import { authenticateToken, requireSuperAdmin, AuthRequest } from '../auth.ts';
 
 const router = Router();
@@ -11,83 +20,96 @@ router.use(requireSuperAdmin);
 // ==========================================
 // 1. OWNER EXECUTIVE DASHBOARD
 // ==========================================
-router.get('/overview', (req: AuthRequest, res: Response) => {
+router.get('/overview', async (req: AuthRequest, res: Response) => {
   try {
     const today = new Date().toISOString().split('T')[0];
     const now = new Date();
     const currentMonth = now.getMonth() + 1;
     const currentYear = now.getFullYear();
-    const monthStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}%`;
+    const monthPrefix = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
 
     // 1. Store settings
-    const settingsRows = db.prepare('SELECT key, value FROM settings').all() as any[];
+    const settings = await Setting.find();
     const settingsMap: Record<string, string> = {};
-    settingsRows.forEach((r) => { settingsMap[r.key] = r.value; });
+    settings.forEach((r) => {
+      settingsMap[r.key] = r.value;
+    });
 
     // 2. Workforce totals
-    const workforce = db.prepare(`
-      SELECT 
-        COUNT(*) as total,
-        SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active,
-        SUM(monthly_salary) as monthly_liability,
-        COUNT(DISTINCT department) as total_departments
-      FROM employees
-    `).get() as any;
+    const totalEmployees = await Employee.countDocuments();
+    const activeStaff = await Employee.find({ status: 'active' });
+    const activeCount = activeStaff.length;
+
+    let monthlyLiability = 0;
+    const deptSet = new Set<string>();
+    for (const emp of activeStaff) {
+      monthlyLiability += emp.monthly_salary || 0;
+      deptSet.add(emp.department);
+    }
 
     // 3. Admin accounts count
-    const adminCountRow = db.prepare(`
-      SELECT COUNT(*) as count FROM users WHERE role IN ('SUPER_ADMIN', 'ADMIN')
-    `).get() as any;
+    const totalAdminAccounts = await User.countDocuments({ role: { $in: ['SUPER_ADMIN', 'ADMIN'] } });
 
     // 4. Today's attendance
-    const todayCounts = db.prepare(`
-      SELECT 
-        SUM(CASE WHEN status = 'Present' THEN 1 ELSE 0 END) as present,
-        SUM(CASE WHEN status = 'Absent' THEN 1 ELSE 0 END) as absent,
-        SUM(CASE WHEN status = 'Half Day' THEN 1 ELSE 0 END) as half_day,
-        SUM(CASE WHEN status = 'Leave' THEN 1 ELSE 0 END) as leave
-      FROM attendance
-      WHERE date = ?
-    `).get(today) as any;
+    const todayRecords = await Attendance.find({ date: today });
+    let present = 0;
+    let absent = 0;
+    let halfDay = 0;
+    let leave = 0;
 
-    const present = todayCounts?.present || 0;
-    const absent = todayCounts?.absent || 0;
-    const halfDay = todayCounts?.half_day || 0;
-    const leave = todayCounts?.leave || 0;
-    const activeStaff = workforce.active || 1;
-    const todayPresenceRate = Math.round(((present + halfDay * 0.5) / activeStaff) * 100);
+    for (const r of todayRecords) {
+      if (r.status === 'Present') present++;
+      else if (r.status === 'Absent') absent++;
+      else if (r.status === 'Half Day') halfDay++;
+      else if (r.status === 'Leave') leave++;
+    }
+
+    const todayPresenceRate = activeCount > 0 ? Math.round(((present + halfDay * 0.5) / activeCount) * 100) : 0;
 
     // 5. Overtime expense this month
-    const otStats = db.prepare(`
-      SELECT 
-        COALESCE(SUM(a.overtime_hours), 0) as total_ot_hours,
-        COALESCE(SUM(a.overtime_hours * e.overtime_rate), 0) as total_ot_cost
-      FROM attendance a
-      JOIN employees e ON a.employee_id = e.employee_id
-      WHERE a.date LIKE ?
-    `).get(monthStr) as any;
+    const monthAtt = await Attendance.find({
+      date: new RegExp(`^${monthPrefix}`),
+    });
+
+    const empMap = new Map(activeStaff.map((e) => [e.employee_id, e]));
+    let totalOtHours = 0;
+    let totalOtCost = 0;
+
+    for (const r of monthAtt) {
+      const emp = empMap.get(r.employee_id);
+      const otH = r.overtime_hours || 0;
+      totalOtHours += otH;
+      if (emp) {
+        totalOtCost += otH * (emp.overtime_rate || 150);
+      }
+    }
 
     // 6. Department breakdown
-    const deptBreakdown = db.prepare(`
-      SELECT 
-        e.department,
-        COUNT(e.employee_id) as headcount,
-        SUM(e.monthly_salary) as total_monthly_salary,
-        COALESCE(SUM(a.overtime_hours), 0) as overtime_hours
-      FROM employees e
-      LEFT JOIN attendance a ON e.employee_id = a.employee_id AND a.date LIKE ?
-      WHERE e.status = 'active'
-      GROUP BY e.department
-      ORDER BY headcount DESC
-    `).all(monthStr) as any[];
+    const deptStats: Record<string, { headcount: number; totalSalary: number; ot: number }> = {};
+    for (const emp of activeStaff) {
+      if (!deptStats[emp.department]) {
+        deptStats[emp.department] = { headcount: 0, totalSalary: 0, ot: 0 };
+      }
+      deptStats[emp.department].headcount++;
+      deptStats[emp.department].totalSalary += emp.monthly_salary || 0;
+    }
+
+    for (const r of monthAtt) {
+      const emp = empMap.get(r.employee_id);
+      if (emp && deptStats[emp.department]) {
+        deptStats[emp.department].ot += r.overtime_hours || 0;
+      }
+    }
+
+    const departmentBreakdown = Object.keys(deptStats).map((dept) => ({
+      department: dept,
+      headcount: deptStats[dept].headcount,
+      totalMonthlySalary: deptStats[dept].totalSalary,
+      overtimeHours: Math.round(deptStats[dept].ot),
+    }));
 
     // 7. Recent executive audit logs
-    const recentLogs = db.prepare(`
-      SELECT id, admin_id, admin_name, action, record_affected, previous_value, new_value, timestamp
-      FROM audit_logs
-      ORDER BY id DESC
-      LIMIT 10
-    `).all();
+    const recentLogs = await AuditLog.find().sort({ timestamp: -1 }).limit(10);
 
     return res.json({
       ownerInfo: {
@@ -98,52 +120,68 @@ router.get('/overview', (req: AuthRequest, res: Response) => {
         email: settingsMap['company_email'] || 'contact@rajpalgarments.com',
       },
       metrics: {
-        totalWorkforce: workforce.total || 0,
-        activeWorkforce: workforce.active || 0,
-        totalDepartments: workforce.total_departments || 0,
-        totalAdminAccounts: adminCountRow?.count || 0,
-        monthlyWageLiability: workforce.monthly_liability || 0,
-        monthlyOvertimeExpense: Math.round(otStats?.total_ot_cost || 0),
-        estimatedAnnualPayroll: Math.round((workforce.monthly_liability || 0) * 12),
+        totalWorkforce: totalEmployees,
+        activeWorkforce: activeCount,
+        totalDepartments: deptSet.size,
+        totalAdminAccounts,
+        monthlyWageLiability: monthlyLiability,
+        monthlyOvertimeExpense: Math.round(totalOtCost),
+        estimatedAnnualPayroll: monthlyLiability * 12,
         todayPresenceRate,
         todayPresentCount: present,
         todayAbsentCount: absent,
-        todayHalfDayCount: halfDay,
         todayLeaveCount: leave,
       },
-      departmentBreakdown: deptBreakdown,
-      recentSecurityEvents: recentLogs,
+      departmentBreakdown,
+      recentSecurityEvents: recentLogs.map((l) => ({
+        id: l._id.toString(),
+        admin_id: l.admin_id,
+        admin_name: l.admin_name,
+        action: l.action,
+        record_affected: l.record_affected,
+        previous_value: l.previous_value,
+        new_value: l.new_value,
+        timestamp: l.timestamp.toISOString(),
+      })),
     });
   } catch (err: any) {
     console.error('Super Admin overview error:', err);
-    return res.status(500).json({ error: 'Failed to retrieve owner executive metrics.' });
+    return res.status(500).json({ error: 'Failed to retrieve owner dashboard metrics.' });
   }
 });
 
 // ==========================================
-// 2. ADMIN & MANAGER ACCOUNT MANAGEMENT
+// 2. ADMIN ACCOUNTS (STORE MANAGERS & RBAC)
 // ==========================================
-// List all Admin and Super Admin accounts
-router.get('/admins', (req: AuthRequest, res: Response) => {
+router.get('/admins', async (req: AuthRequest, res: Response) => {
   try {
-    const admins = db.prepare(`
-      SELECT id, username, email, role, status, created_at
-      FROM users
-      WHERE role IN ('SUPER_ADMIN', 'ADMIN')
-      ORDER BY role ASC, id ASC
-    `).all();
-    return res.json({ admins });
+    const admins = await User.find({ role: { $in: ['SUPER_ADMIN', 'ADMIN'] } }).sort({ created_at: -1 });
+    return res.json({
+      admins: admins.map((a) => ({
+        id: a._id.toString(),
+        username: a.username,
+        email: a.email,
+        role: a.role,
+        status: a.status,
+        created_at: a.created_at.toISOString(),
+      })),
+    });
   } catch (err: any) {
-    return res.status(500).json({ error: 'Failed to fetch admin accounts.' });
+    return res.status(500).json({ error: 'Failed to retrieve admin accounts.' });
   }
 });
 
-// Create new Manager / Admin user
-router.post('/admins', (req: AuthRequest, res: Response) => {
+// Create Admin account
+router.post('/admins', async (req: AuthRequest, res: Response) => {
   try {
     const { username, email, password, role } = req.body;
+
     if (!username || !email || !password) {
       return res.status(400).json({ error: 'Username, email, and password are required.' });
+    }
+
+    if (password.length < 8) {
+      return res.status(400).json({ error: 'Password must be at least 8 characters long.' });
     }
 
     const cleanUsername = username.trim().toLowerCase();
@@ -151,25 +189,44 @@ router.post('/admins', (req: AuthRequest, res: Response) => {
     const assignedRole = role === 'SUPER_ADMIN' ? 'SUPER_ADMIN' : 'ADMIN';
 
     // Check unique username or email
-    const existing = db.prepare('SELECT id FROM users WHERE LOWER(username) = ? OR LOWER(email) = ?').get(cleanUsername, cleanEmail);
+    const existing = await User.findOne({
+      $or: [{ username: cleanUsername }, { email: cleanEmail }],
+    });
     if (existing) {
       return res.status(400).json({ error: 'A user with this username or email already exists.' });
     }
 
     const hashed = hashPassword(password);
-    db.prepare(`
-      INSERT INTO users (username, email, password_hash, role, employee_id, status)
-      VALUES (?, ?, ?, ?, null, 'active')
-    `).run(cleanUsername, cleanEmail, hashed, assignedRole);
+    const newAdmin = await User.create({
+      username: cleanUsername,
+      email: cleanEmail,
+      password_hash: hashed,
+      role: assignedRole,
+      employee_id: null,
+      status: 'active',
+      created_at: new Date(),
+    });
 
-    logAudit(
-      req.user!.username, req.user!.name || 'Owner', 'ADMIN_ACCOUNT_CREATED',
-      `Account @${cleanUsername} (${cleanEmail})`, '', `Role: ${assignedRole}`
+    await logAudit(
+      req.user!.username,
+      req.user!.name || 'Owner',
+      'ADMIN_ACCOUNT_CREATED',
+      `Account @${cleanUsername} (${cleanEmail})`,
+      '',
+      `Role: ${assignedRole}`
     );
 
     return res.status(201).json({
       success: true,
-      message: `Admin account for @${cleanUsername} created successfully with role ${assignedRole}.`
+      message: `Admin account for @${cleanUsername} created successfully with role ${assignedRole}.`,
+      admin: {
+        id: newAdmin._id.toString(),
+        username: newAdmin.username,
+        email: newAdmin.email,
+        role: newAdmin.role,
+        status: newAdmin.status,
+        created_at: newAdmin.created_at.toISOString(),
+      },
     });
   } catch (err: any) {
     console.error('Create admin error:', err);
@@ -177,37 +234,43 @@ router.post('/admins', (req: AuthRequest, res: Response) => {
   }
 });
 
-// Update Admin account (status / password)
-router.put('/admins/:id', (req: AuthRequest, res: Response) => {
+// Update Admin account
+router.put('/admins/:id', async (req: AuthRequest, res: Response) => {
   try {
-    const adminId = parseInt(req.params.id, 10);
-    const targetUser = db.prepare('SELECT * FROM users WHERE id = ?').get(adminId) as any;
+    const adminId = req.params.id;
+    const targetUser = await User.findById(adminId);
     if (!targetUser) {
       return res.status(404).json({ error: 'User not found.' });
     }
 
     // Owner protection: cannot demote own account or deactivate self
-    if (targetUser.id === req.user!.id && req.body.status === 'inactive') {
+    if (targetUser._id.toString() === req.user!.id && req.body.status === 'inactive') {
       return res.status(400).json({ error: 'You cannot deactivate your own Super Admin account.' });
     }
 
     const { status, password, role } = req.body;
 
     if (status && (status === 'active' || status === 'inactive')) {
-      db.prepare('UPDATE users SET status = ? WHERE id = ?').run(status, adminId);
+      targetUser.status = status;
     }
 
     if (role && (role === 'ADMIN' || role === 'SUPER_ADMIN')) {
-      db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, adminId);
+      targetUser.role = role;
     }
 
-    if (password && password.trim().length >= 4) {
-      db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(password.trim()), adminId);
+    if (password && password.trim().length >= 8) {
+      targetUser.password_hash = hashPassword(password.trim());
     }
 
-    logAudit(
-      req.user!.username, req.user!.name || 'Owner', 'ADMIN_ACCOUNT_MODIFIED',
-      `Account #${adminId} (@${targetUser.username})`, `Status: ${targetUser.status}`, `Status: ${status || targetUser.status}`
+    await targetUser.save();
+
+    await logAudit(
+      req.user!.username,
+      req.user!.name || 'Owner',
+      'ADMIN_ACCOUNT_MODIFIED',
+      `Account #${adminId} (@${targetUser.username})`,
+      '',
+      `Status: ${targetUser.status}, Role: ${targetUser.role}`
     );
 
     return res.json({ success: true, message: `Admin account @${targetUser.username} updated.` });
@@ -217,29 +280,61 @@ router.put('/admins/:id', (req: AuthRequest, res: Response) => {
 });
 
 // Delete Admin account
-router.delete('/admins/:id', (req: AuthRequest, res: Response) => {
+router.delete('/admins/:id', async (req: AuthRequest, res: Response) => {
   try {
-    const adminId = parseInt(req.params.id, 10);
-    if (adminId === req.user!.id) {
-      return res.status(400).json({ error: 'Cannot delete your own active Super Admin session.' });
-    }
-
-    const targetUser = db.prepare('SELECT * FROM users WHERE id = ?').get(adminId) as any;
+    const adminId = req.params.id;
+    const targetUser = await User.findById(adminId);
     if (!targetUser) {
-      return res.status(404).json({ error: 'Account not found.' });
+      return res.status(404).json({ error: 'Admin account not found.' });
     }
 
-    db.prepare('DELETE FROM users WHERE id = ?').run(adminId);
-    db.prepare('DELETE FROM sessions WHERE user_id = ?').run(adminId);
+    // Owner protection
+    if (targetUser._id.toString() === req.user!.id) {
+      return res.status(400).json({ error: 'You cannot delete your own Super Admin account.' });
+    }
 
-    logAudit(
-      req.user!.username, req.user!.name || 'Owner', 'ADMIN_ACCOUNT_DELETED',
-      `Account @${targetUser.username}`, 'Active admin account', 'Deleted'
+    await User.findByIdAndDelete(adminId);
+
+    await logAudit(
+      req.user!.username,
+      req.user!.name || 'Owner',
+      'ADMIN_ACCOUNT_DELETED',
+      `Account #${adminId} (@${targetUser.username})`,
+      `Role: ${targetUser.role}`,
+      'Account deleted'
     );
 
-    return res.json({ success: true, message: `Account @${targetUser.username} deleted.` });
+    return res.json({ success: true, message: `Admin account @${targetUser.username} removed.` });
   } catch (err: any) {
     return res.status(500).json({ error: 'Failed to delete admin account.' });
+  }
+});
+
+// ==========================================
+// 3. SEED 100+ STORE WORKERS (PERFORMANCE TEST)
+// ==========================================
+router.post('/seed-test-workers', async (req: AuthRequest, res: Response) => {
+  try {
+    const target = req.body.count ? parseInt(req.body.count, 10) : 100;
+    const finalCount = await seedWorkersUpTo(target);
+
+    await logAudit(
+      req.user!.username,
+      req.user!.name || 'Owner',
+      'TEST_DATA_SEEDED',
+      'Employees & Users in MongoDB',
+      '',
+      `Ensured ${finalCount} workforce profiles`
+    );
+
+    return res.json({
+      success: true,
+      message: `Workforce database populated to ${finalCount} active employees.`,
+      count: finalCount,
+    });
+  } catch (err: any) {
+    console.error('Seeding error:', err);
+    return res.status(500).json({ error: 'Failed to seed staff members.' });
   }
 });
 
