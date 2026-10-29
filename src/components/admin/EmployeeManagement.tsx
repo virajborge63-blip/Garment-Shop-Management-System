@@ -558,10 +558,13 @@ export const EmployeeManagement: React.FC = () => {
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">Initial Portal Password</label>
                 <input
-                  type="text"
+                  type="password"
+                  required
+                  minLength={12}
+                  autoComplete="new-password"
                   value={formData.password}
                   onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                  placeholder="Leave empty for auto-generated <username>123"
+                  placeholder="At least 12 characters"
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 font-mono"
                 />
               </div>
@@ -712,9 +715,11 @@ export const EmployeeManagement: React.FC = () => {
                 <label className="block font-semibold text-slate-700 mb-1">Reset Password (Optional)</label>
                 <input
                   type="password"
+                  minLength={12}
+                  autoComplete="new-password"
                   value={formData.password}
                   onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                  placeholder="Enter new password to override current"
+                  placeholder="Enter a new password (at least 12 characters)"
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900"
                 />
               </div>

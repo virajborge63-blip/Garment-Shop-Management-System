@@ -33,7 +33,7 @@ async function runSetup() {
   // Filter out flag arguments to extract positional values
   const positionalArgs = rawArgs.filter(arg => !arg.startsWith('-'));
   const email = (positionalArgs[0] || process.env.ADMIN_EMAIL || process.env.INITIAL_ADMIN_EMAIL || '').trim();
-  const password = (positionalArgs[1] || process.env.ADMIN_PASSWORD || process.env.INITIAL_ADMIN_PASSWORD || '').trim();
+  const password = positionalArgs[1] || process.env.ADMIN_PASSWORD || process.env.INITIAL_ADMIN_PASSWORD || '';
   const username = (positionalArgs[2] || process.env.ADMIN_USERNAME || process.env.INITIAL_ADMIN_USERNAME || 'owner_admin').trim();
 
   if (!email || !password) {
@@ -51,8 +51,8 @@ async function runSetup() {
   }
 
   // Validate password length
-  if (password.length < 8) {
-    console.error('Error: Password must be at least 8 characters long.');
+  if (password.length < 12) {
+    console.error('Error: Password must be at least 12 characters long.');
     process.exit(1);
   }
 

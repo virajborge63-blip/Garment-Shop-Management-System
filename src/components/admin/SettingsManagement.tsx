@@ -7,9 +7,9 @@ import {
 export const SettingsManagement: React.FC = () => {
   const [settings, setSettings] = useState({
     company_name: 'H.M. RAJPAL GARMENT SHOP',
-    company_address: 'Shop No. 12-14, Cloth Market, Main Bazaar',
-    company_phone: '+91 98234 56789',
-    company_email: 'contact@rajpalgarments.com',
+    company_address: '',
+    company_phone: '',
+    company_email: '',
     standard_working_days: '26',
     standard_daily_hours: '8',
     leave_is_paid: 'true',

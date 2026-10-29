@@ -30,17 +30,29 @@ export const LoginPage: React.FC = () => {
     if (!forgotEmail) return;
     setIsForgotLoading(true);
     setForgotMsg(null);
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 15000);
     try {
       const res = await fetch('/api/auth/forgot-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: forgotEmail }),
+        signal: controller.signal,
       });
-      const data = await res.json();
-      setForgotMsg(data.message || 'Password reset request processed. Please check with your administrator.');
-    } catch {
-      setForgotMsg('Password reset request submitted. Please contact the Store Owner.');
+      const data: { message?: string; error?: string } = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setForgotMsg(data.error || 'The password reset service is unavailable. Please contact the Store Owner directly.');
+        return;
+      }
+      setForgotMsg(data.message || 'Contact the Store Owner directly to arrange a password reset.');
+    } catch (err) {
+      setForgotMsg(
+        err instanceof Error && err.name === 'AbortError'
+          ? 'The request timed out. Contact the Store Owner directly to arrange a password reset.'
+          : 'Could not reach the password reset service. Contact the Store Owner directly.'
+      );
     } finally {
+      window.clearTimeout(timeout);
       setIsForgotLoading(false);
     }
   };
@@ -99,7 +111,7 @@ export const LoginPage: React.FC = () => {
                     setIdentifier(e.target.value);
                     if (error) clearError();
                   }}
-                  placeholder="e.g. hmrajapal11@gmail.com"
+                  placeholder="name@business.com"
                   className="block w-full pl-10 pr-3.5 py-2.5 bg-slate-950/70 border border-slate-750 rounded-xl text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 text-sm transition-all"
                 />
               </div>
@@ -198,7 +210,7 @@ export const LoginPage: React.FC = () => {
               Forgot Password
             </h3>
             <p className="mt-1 text-xs text-slate-400">
-              Enter your registered store email address to receive password reset assistance.
+              Password resets are handled directly by the Store Owner; this form does not send email.
             </p>
 
             {forgotMsg ? (
@@ -218,7 +230,7 @@ export const LoginPage: React.FC = () => {
                     required
                     value={forgotEmail}
                     onChange={(e) => setForgotEmail(e.target.value)}
-                    placeholder="e.g. hmrajapal11@gmail.com"
+                    placeholder="name@business.com"
                     className="mt-1 block w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-slate-100 placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
                   />
                 </div>

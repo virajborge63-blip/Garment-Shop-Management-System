@@ -28,9 +28,9 @@ export function SalarySlipModal({
 
   const currency = companyInfo.currency_symbol || '₹';
   const companyName = companyInfo.company_name || 'H.M. RAJPAL GARMENT SHOP';
-  const companyAddress = companyInfo.company_address || 'Shop No. 12-14, Cloth Market, Main Bazaar';
-  const companyPhone = companyInfo.company_phone || '+91 98234 56789';
-  const companyEmail = companyInfo.company_email || 'contact@rajpalgarments.com';
+  const companyAddress = companyInfo.company_address || '';
+  const companyPhone = companyInfo.company_phone || '';
+  const companyEmail = companyInfo.company_email || '';
 
   const monthNames = [
     'January', 'February', 'March', 'April', 'May', 'June',
@@ -99,8 +99,14 @@ export function SalarySlipModal({
                 </div>
                 <div>
                   <h1 className="text-xl font-extrabold text-slate-950 tracking-tight">{companyName}</h1>
-                  <p className="text-xs text-slate-600 mt-0.5">{companyAddress}</p>
-                  <p className="text-xs text-slate-500">Contact: {companyPhone} | Email: {companyEmail}</p>
+                  {companyAddress && <p className="text-xs text-slate-600 mt-0.5">{companyAddress}</p>}
+                  {(companyPhone || companyEmail) && (
+                    <p className="text-xs text-slate-500">
+                      {companyPhone && `Contact: ${companyPhone}`}
+                      {companyPhone && companyEmail && ' | '}
+                      {companyEmail && `Email: ${companyEmail}`}
+                    </p>
+                  )}
                 </div>
               </div>
               <div className="text-right">

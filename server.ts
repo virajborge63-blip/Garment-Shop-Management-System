@@ -64,14 +64,14 @@ async function startServer() {
   app.get('/api/health', (req, res) => {
     try {
       const isDbConnected = mongoose.connection.readyState === 1;
-      return res.json({
-        status: 'ok',
+      return res.status(isDbConnected ? 200 : 503).json({
+        status: isDbConnected ? 'ok' : 'error',
         uptime: Math.round(process.uptime()),
-        database: isDbConnected ? 'connected' : 'connecting',
+        database: isDbConnected ? 'connected' : 'disconnected',
         engine: 'MongoDB',
         timestamp: new Date().toISOString()
       });
-    } catch (err: any) {
+    } catch {
       return res.status(500).json({ status: 'error', message: 'Health check failed' });
     }
   });

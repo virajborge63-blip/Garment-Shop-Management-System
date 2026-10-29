@@ -7,7 +7,6 @@ import {
   AuditLog,
   logAudit,
   hashPassword,
-  seedWorkersUpTo,
 } from '../db.ts';
 import { authenticateToken, requireSuperAdmin, AuthRequest } from '../auth.ts';
 
@@ -115,9 +114,9 @@ router.get('/overview', async (req: AuthRequest, res: Response) => {
       ownerInfo: {
         storeName: settingsMap['company_name'] || 'H.M. RAJPAL GARMENT SHOP',
         ownerName: 'H.M. Rajpal',
-        address: settingsMap['company_address'] || 'Shop No. 12-14, Cloth Market, Main Bazaar',
-        phone: settingsMap['company_phone'] || '+91 98234 56789',
-        email: settingsMap['company_email'] || 'contact@rajpalgarments.com',
+        address: settingsMap['company_address'] || '',
+        phone: settingsMap['company_phone'] || '',
+        email: settingsMap['company_email'] || '',
       },
       metrics: {
         totalWorkforce: totalEmployees,
@@ -176,12 +175,12 @@ router.post('/admins', async (req: AuthRequest, res: Response) => {
   try {
     const { username, email, password, role } = req.body;
 
-    if (!username || !email || !password) {
+    if (typeof username !== 'string' || typeof email !== 'string' || typeof password !== 'string' || !username.trim() || !email.trim() || !password) {
       return res.status(400).json({ error: 'Username, email, and password are required.' });
     }
 
-    if (password.length < 8) {
-      return res.status(400).json({ error: 'Password must be at least 8 characters long.' });
+    if (password.length < 12) {
+      return res.status(400).json({ error: 'Password must be at least 12 characters long.' });
     }
 
     const cleanUsername = username.trim().toLowerCase();
@@ -258,8 +257,11 @@ router.put('/admins/:id', async (req: AuthRequest, res: Response) => {
       targetUser.role = role;
     }
 
-    if (password && password.trim().length >= 8) {
-      targetUser.password_hash = hashPassword(password.trim());
+    if (password !== undefined && password !== '') {
+      if (typeof password !== 'string' || password.length < 12) {
+        return res.status(400).json({ error: 'Password must be at least 12 characters long.' });
+      }
+      targetUser.password_hash = hashPassword(password);
     }
 
     await targetUser.save();
@@ -307,34 +309,6 @@ router.delete('/admins/:id', async (req: AuthRequest, res: Response) => {
     return res.json({ success: true, message: `Admin account @${targetUser.username} removed.` });
   } catch (err: any) {
     return res.status(500).json({ error: 'Failed to delete admin account.' });
-  }
-});
-
-// ==========================================
-// 3. SEED 100+ STORE WORKERS (PERFORMANCE TEST)
-// ==========================================
-router.post('/seed-test-workers', async (req: AuthRequest, res: Response) => {
-  try {
-    const target = req.body.count ? parseInt(req.body.count, 10) : 100;
-    const finalCount = await seedWorkersUpTo(target);
-
-    await logAudit(
-      req.user!.username,
-      req.user!.name || 'Owner',
-      'TEST_DATA_SEEDED',
-      'Employees & Users in MongoDB',
-      '',
-      `Ensured ${finalCount} workforce profiles`
-    );
-
-    return res.json({
-      success: true,
-      message: `Workforce database populated to ${finalCount} active employees.`,
-      count: finalCount,
-    });
-  } catch (err: any) {
-    console.error('Seeding error:', err);
-    return res.status(500).json({ error: 'Failed to seed staff members.' });
   }
 });
 

@@ -1,6 +1,6 @@
 # Garment Shop Management System (Full-Stack React + Node.js + MongoDB)
 
-A complete, production-ready Full-Stack Garment Shop Management & Workforce ERP System built with **React 19 + Vite** on the frontend, **Node.js + Express + TypeScript** on the backend, and **MongoDB with Mongoose** for database persistence.
+A Full-Stack Garment Shop Management & Workforce ERP System built with **React 19 + Vite** on the frontend, **Node.js + Express + TypeScript** on the backend, and **MongoDB with Mongoose** for database persistence.
 
 ---
 
@@ -33,8 +33,8 @@ A complete, production-ready Full-Stack Garment Shop Management & Workforce ERP 
 
 - **Frontend**: React 19, Vite, Tailwind CSS, Lucide React
 - **Backend**: Node.js, Express, TypeScript, tsx
-- **Database**: MongoDB with Mongoose (with embedded `mongodb-memory-server` fallback for zero-configuration local runs)
-- **Deployment**: Production-ready for Render, Railway, AWS, or local self-hosting
+- **Database**: MongoDB with Mongoose (embedded `mongodb-memory-server` is local-development-only)
+- **Deployment**: Node.js hosting platforms or local self-hosting
 
 ---
 
@@ -47,17 +47,22 @@ NODE_ENV=development
 PORT=3000
 
 # MongoDB URI (MongoDB Atlas or Local MongoDB)
-# If omitted or left blank, the app will automatically start an in-memory MongoDB instance!
+# Required in production. In-memory MongoDB is available only for local development.
 MONGODB_URI=mongodb://127.0.0.1:27017/garment_shop_erp
 
-# Session secret for cryptographically signing sessions
-SESSION_SECRET=your_long_random_session_secret_string
+# Production requires a random secret with at least 32 characters.
+SESSION_SECRET=replace_with_a_random_secret_at_least_32_characters_long
 
-# Default Super Admin credentials
-ADMIN_EMAIL=hmrajpal11@gmail.com
-ADMIN_PASSWORD=HMRajpal@89565
-ADMIN_USERNAME=hmrajpal
+# Optional environment-based initial owner provisioning. Uncomment and replace all values.
+# ADMIN_EMAIL=owner@example.com
+# ADMIN_PASSWORD=replace_with_a_unique_password_at_least_12_characters
+# ADMIN_USERNAME=owner_admin
+
+# Required in production only if using the remote /api/auth/setup-admin endpoint.
+# SETUP_TOKEN=replace_with_a_long_random_setup_token
 ```
+
+Never deploy the example values. Keep real values in the hosting provider's secret environment configuration, not in the repository.
 
 ---
 
@@ -68,9 +73,9 @@ ADMIN_USERNAME=hmrajpal
 npm install
 ```
 
-### 2. (Optional) Setup Super Admin via CLI
+### 2. Setup the initial Super Admin via CLI
 ```bash
-npm run setup:admin hmrajpal11@gmail.com HMRajpal@89565 hmrajpal
+npm run setup:admin -- owner@example.com YOUR_UNIQUE_PASSWORD_AT_LEAST_12_CHARS owner_admin
 ```
 
 ### 3. Start Development Server
@@ -84,6 +89,10 @@ Open **http://localhost:3000** in your browser.
 npm run build
 npm start
 ```
+
+Production requires `MONGODB_URI` and a `SESSION_SECRET` of at least 32 characters. The server exits with an actionable error if the database is unavailable; it does not switch to temporary storage. The hosting platform must provide `PORT`; the server binds to `0.0.0.0`. Set `NODE_ENV=production`.
+
+For a Node.js host, use `npm run build` as the build command and `npm start` as the start command, with the environment variables above configured in the host's secret settings. Provision the first owner using the setup CLI against the same persistent database before giving client users access. No hosting-provider-specific deployment manifest is present in this repository, so provider-specific networking and health-check setup must be completed in that provider's dashboard.
 
 ---
 

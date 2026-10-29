@@ -297,6 +297,9 @@ router.post('/employees', async (req: AuthRequest, res: Response) => {
     if (!name || !email || !department || !designation) {
       return res.status(400).json({ error: 'Name, email, department, and designation are required.' });
     }
+    if (typeof password !== 'string' || password.length < 12) {
+      return res.status(400).json({ error: 'A unique initial password of at least 12 characters is required.' });
+    }
 
     const cleanEmail = email.trim().toLowerCase();
 
@@ -342,8 +345,7 @@ router.post('/employees', async (req: AuthRequest, res: Response) => {
 
     // Create user login account for employee
     const username = cleanEmail.split('@')[0].toLowerCase();
-    const userPass = password || `${username}123`;
-    const passwordHash = hashPassword(userPass);
+    const passwordHash = hashPassword(password);
 
     const existingUser = await User.findOne({ username });
     const finalUsername = existingUser ? `${username}_${newEmpId.toLowerCase()}` : username;
@@ -414,8 +416,11 @@ router.put('/employees/:id', async (req: AuthRequest, res: Response) => {
     // Update user status and password if provided
     const userUpdate: any = {};
     if (status) userUpdate.status = status;
-    if (password && password.trim().length >= 4) {
-      userUpdate.password_hash = hashPassword(password.trim());
+    if (password !== undefined && password !== '') {
+      if (typeof password !== 'string' || password.length < 12) {
+        return res.status(400).json({ error: 'A reset password must be at least 12 characters long.' });
+      }
+      userUpdate.password_hash = hashPassword(password);
     }
     if (Object.keys(userUpdate).length > 0) {
       await User.updateOne({ employee_id: empId }, { $set: userUpdate });

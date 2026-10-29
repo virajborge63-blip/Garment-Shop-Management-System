@@ -326,7 +326,7 @@ export const AdminAccountsManagement: React.FC = () => {
                   required
                   value={formData.email}
                   onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                  placeholder="e.g. ravi@rajpalgarments.com"
+                  placeholder="manager@example.com"
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 font-medium focus:ring-2 focus:ring-amber-500"
                 />
               </div>
@@ -336,10 +336,11 @@ export const AdminAccountsManagement: React.FC = () => {
                 <input
                   type="password"
                   required
-                  minLength={4}
+                  minLength={12}
+                  autoComplete="new-password"
                   value={formData.password}
                   onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                  placeholder="Minimum 4 characters"
+                  placeholder="At least 12 characters"
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 font-medium focus:ring-2 focus:ring-amber-500"
                 />
               </div>
@@ -395,10 +396,11 @@ export const AdminAccountsManagement: React.FC = () => {
                 <input
                   type="password"
                   required
-                  minLength={4}
+                  minLength={12}
+                  autoComplete="new-password"
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="Enter new password"
+                  placeholder="At least 12 characters"
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg font-medium text-slate-900 focus:ring-2 focus:ring-indigo-500"
                 />
               </div>

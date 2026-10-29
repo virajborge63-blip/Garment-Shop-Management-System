@@ -91,7 +91,7 @@ export async function authenticateToken(req: AuthRequest, res: Response, next: N
       name: displayName,
       department: user.role === 'SUPER_ADMIN' ? 'Executive Board / Ownership' : employee?.department,
       designation: user.role === 'SUPER_ADMIN' ? 'Store Owner & Super Admin' : employee?.designation,
-      avatar_url: employee?.avatar_url || (user.role === 'SUPER_ADMIN' ? 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80' : undefined),
+      avatar_url: employee?.avatar_url,
     };
 
     next();

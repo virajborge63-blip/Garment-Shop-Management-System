@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import mongoose from 'mongoose';
 import { User, Employee, Session, hashPassword, verifyPassword, logAudit } from '../db.ts';
 import { createSession, authenticateToken, AuthRequest } from '../auth.ts';
 import { authRateLimiter } from '../middleware/rateLimiter.ts';
@@ -37,7 +38,7 @@ router.post('/login', authRateLimiter, async (req: Request, res: Response) => {
     });
 
     if (!user) {
-      return res.status(401).json({ error: 'Invalid credentials. User not found.' });
+      return res.status(401).json({ error: 'Invalid username/email or password.' });
     }
 
     if (user.status !== 'active') {
@@ -46,7 +47,7 @@ router.post('/login', authRateLimiter, async (req: Request, res: Response) => {
 
     const isValidPassword = verifyPassword(cleanPass, user.password_hash);
     if (!isValidPassword) {
-      return res.status(401).json({ error: 'Invalid password. Please try again.' });
+      return res.status(401).json({ error: 'Invalid username/email or password.' });
     }
 
     // If password was verified using legacy hash (SHA-256), seamlessly upgrade to modern scrypt hash
@@ -97,8 +98,15 @@ router.post('/login', authRateLimiter, async (req: Request, res: Response) => {
       }
     });
   } catch (err: any) {
-    console.error('Login error:', err?.message || 'Authentication error');
-    return res.status(500).json({ error: 'Authentication failed due to server error.' });
+    const databaseUnavailable = mongoose.connection.readyState !== 1 ||
+      /Mongo|Mongoose|ServerSelection|Topology/.test(err?.name || '');
+    console.error('Login request failed:', databaseUnavailable ? 'database unavailable' : err?.name || 'server error');
+    return res.status(databaseUnavailable ? 503 : 500).json({
+      error: databaseUnavailable
+        ? 'The authentication service is temporarily unavailable. Please try again shortly.'
+        : 'Authentication failed due to a server error.',
+      code: databaseUnavailable ? 'DATABASE_UNAVAILABLE' : 'AUTHENTICATION_ERROR',
+    });
   }
 });
 
@@ -116,7 +124,7 @@ router.post('/setup-admin', authRateLimiter, async (req: Request, res: Response)
     }
 
     const trimmedEmail = email.trim().toLowerCase();
-    const cleanPassword = password.trim();
+    const cleanPassword = password;
     const adminUsername = (typeof username === 'string' && username.trim()) ? username.trim() : 'owner_admin';
 
     // Email format validation
@@ -126,8 +134,8 @@ router.post('/setup-admin', authRateLimiter, async (req: Request, res: Response)
     }
 
     // Password strength check
-    if (cleanPassword.length < 8) {
-      return res.status(400).json({ error: 'Password must be at least 8 characters long.' });
+    if (cleanPassword.length < 12) {
+      return res.status(400).json({ error: 'Password must be at least 12 characters long.' });
     }
 
     // Check existing Super Admin status
@@ -215,14 +223,8 @@ router.post('/forgot-password', authRateLimiter, (req: Request, res: Response) =
 
   // Safe response: do not leak whether user exists
   return res.json({
-    success: true,
-    message: 'If an account associated with this email exists, password reset instructions have been logged. Please contact your Super Admin to update credentials.'
+    message: 'If this address is registered, contact the Store Owner directly to arrange a password reset. This system does not send reset emails.'
   });
-});
-
-// 6. Demo accounts endpoint (disabled - clean production state)
-router.get('/demo-accounts', (req: Request, res: Response) => {
-  return res.json({ accounts: [] });
 });
 
 export default router;

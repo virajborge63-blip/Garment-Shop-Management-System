@@ -1,17 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { User } from '../types.ts';
 
-interface DemoAccount {
-  role: 'SUPER_ADMIN' | 'ADMIN' | 'EMPLOYEE';
-  name: string;
-  email: string;
-  username: string;
-  passwordHint: string;
-  designation: string;
-  department: string;
-  employeeId?: string;
-}
-
 interface AuthContextType {
   user: User | null;
   token: string | null;
@@ -20,7 +9,6 @@ interface AuthContextType {
   login: (identifier: string, pass: string) => Promise<boolean>;
   logout: () => Promise<void>;
   clearError: () => void;
-  demoAccounts: DemoAccount[];
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -30,17 +18,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [token, setToken] = useState<string | null>(() => localStorage.getItem('erp_token'));
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
-  const [demoAccounts, setDemoAccounts] = useState<DemoAccount[]>([]);
-
-  // Fetch demo accounts
-  useEffect(() => {
-    fetch('/api/auth/demo-accounts')
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.accounts) setDemoAccounts(data.accounts);
-      })
-      .catch((err) => console.error('Failed to load demo accounts', err));
-  }, []);
 
   // Validate session on mount
   useEffect(() => {
@@ -62,14 +39,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           const data = await res.json();
           setUser(data.user);
           setToken(storedToken);
-        } else {
-          // Token expired or invalid
+        } else if (res.status === 401 || res.status === 403) {
           localStorage.removeItem('erp_token');
           setToken(null);
           setUser(null);
+        } else {
+          setError('The saved session could not be verified. Check your connection and try again.');
         }
-      } catch (err) {
-        console.error('Session verify failed', err);
+      } catch {
+        setError('Could not verify the saved session. Check your connection and try again.');
       } finally {
         setIsLoading(false);
       }
@@ -81,31 +59,58 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const login = async (identifier: string, pass: string): Promise<boolean> => {
     setError(null);
     setIsLoading(true);
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 15000);
 
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ identifier, password: pass }),
+        signal: controller.signal,
       });
 
-      const data = await res.json();
+      const data: {
+        token?: string;
+        user?: User;
+        error?: string;
+      } = await res.json().catch(() => ({}));
 
       if (!res.ok) {
-        setError(data.error || 'Authentication failed.');
-        setIsLoading(false);
+        const message = res.status === 503
+          ? 'The login service or database is temporarily unavailable. Please try again shortly.'
+          : res.status >= 500
+            ? 'The login service encountered an error. Please try again later.'
+            : res.status === 429
+              ? data.error || 'Too many login attempts. Please wait before trying again.'
+              : res.status === 401
+                ? data.error || 'Invalid username/email or password.'
+                : res.status === 404
+                  ? 'The login endpoint is unavailable. Please contact support.'
+                  : data.error || 'The login request could not be completed.';
+        setError(message);
+        return false;
+      }
+
+      if (!data.token || !data.user) {
+        setError('The login service returned an invalid response. Please try again later.');
         return false;
       }
 
       localStorage.setItem('erp_token', data.token);
       setToken(data.token);
       setUser(data.user);
-      setIsLoading(false);
       return true;
-    } catch (err: any) {
-      setError('Network connection error. Server may be starting.');
-      setIsLoading(false);
+    } catch (err) {
+      setError(
+        err instanceof Error && err.name === 'AbortError'
+          ? 'The login request timed out. Check your connection and try again.'
+          : 'Cannot reach the login service. Check your network connection and try again.'
+      );
       return false;
+    } finally {
+      window.clearTimeout(timeout);
+      setIsLoading(false);
     }
   };
 
@@ -138,7 +143,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         login,
         logout,
         clearError,
-        demoAccounts,
       }}
     >
       {children}

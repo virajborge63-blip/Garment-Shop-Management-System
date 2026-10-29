@@ -9,29 +9,27 @@ dotenv.config();
 export * from './models/index.ts';
 import {
   User,
-  Employee,
-  Attendance,
-  Payroll,
   AuditLog,
   Setting,
   Session,
   Category,
-  Product,
-  Customer,
-  Supplier,
-  Sale,
 } from './models/index.ts';
 
 let mongoMemoryServerInstance: MongoMemoryServer | null = null;
 let isConnected = false;
+
+function isProductionEnvironment(): boolean {
+  return process.env.NODE_ENV === 'production' ||
+    process.argv[1]?.endsWith('server.cjs') === true ||
+    process.env.npm_lifecycle_event === 'start';
+}
 
 /**
  * Connect to MongoDB using Mongoose.
  * Supports:
  *  1. Remote/Production MongoDB Atlas URI via MONGODB_URI
  *  2. Local running MongoDB instance (e.g., mongodb://127.0.0.1:27017/garment_shop)
- *  3. In-memory real MongoDB server (MongoMemoryServer) when no external URI is provided,
- *     guaranteeing 100% operational functionality out of the box in any environment.
+ *  3. In-memory MongoDB is available only for local development without a configured URI.
  */
 export async function connectDB(): Promise<typeof mongoose> {
   if (isConnected && mongoose.connection.readyState === 1) {
@@ -39,23 +37,34 @@ export async function connectDB(): Promise<typeof mongoose> {
   }
 
   const configuredUri = process.env.MONGODB_URI;
+  const isProduction = isProductionEnvironment();
+
+  if (isProduction && !configuredUri) {
+    throw new Error('MONGODB_URI must be configured in production; in-memory storage is not persistent.');
+  }
+  if (
+    isProduction &&
+    (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32)
+  ) {
+    throw new Error('SESSION_SECRET must be configured with at least 32 characters in production.');
+  }
 
   if (configuredUri) {
     try {
-      console.log(`[Database] Connecting to configured MongoDB instance...`);
+      console.log('[Database] Connecting to configured MongoDB instance...');
       await mongoose.connect(configuredUri, {
-        serverSelectionTimeoutMS: 5000,
+        serverSelectionTimeoutMS: 10000,
       });
       isConnected = true;
-      console.log(`[Database] MongoDB successfully connected to: ${configuredUri.split('@').pop()}`);
+      console.log('[Database] MongoDB connection established.');
       return mongoose;
-    } catch (connErr: any) {
-      console.warn(`[Database Warning] Could not connect to configured MONGODB_URI:`, connErr?.message || connErr);
-      console.log(`[Database] Falling back to automated in-memory MongoDB engine...`);
+    } catch {
+      console.error('[Database] Could not connect to the configured MongoDB instance.');
+      throw new Error('MongoDB connection failed. Check MONGODB_URI, network access, and database availability.');
     }
   }
 
-  // Fallback to MongoMemoryServer for standalone/local zero-config execution
+  // Use in-memory MongoDB only for local development without a configured URI.
   if (!mongoMemoryServerInstance) {
     console.log(`[Database] Initializing automated MongoDB engine (MongoMemoryServer)...`);
     mongoMemoryServerInstance = await MongoMemoryServer.create();
@@ -149,9 +158,6 @@ export async function initDatabase(): Promise<void> {
   // 1. Default Store Settings
   const defaultSettings: Record<string, string> = {
     company_name: 'H.M. RAJPAL GARMENT SHOP',
-    company_address: 'Shop No. 12-14, Cloth Market, Main Bazaar',
-    company_phone: '+91 98234 56789',
-    company_email: 'hmrajpal11@gmail.com',
     standard_working_days: '26',
     standard_daily_hours: '8',
     leave_is_paid: 'true',
@@ -182,132 +188,14 @@ export async function initDatabase(): Promise<void> {
     }
   }
 
-  // 3. Initial Sample Products & Inventory
-  const productCount = await Product.countDocuments();
-  if (productCount === 0) {
-    const sampleProducts = [
-      {
-        name: 'Royal Blue Silk Banarasi Saree',
-        sku: 'SAR-SILK-001',
-        category: "Women's Ethnic & Sarees",
-        size: 'Free Size',
-        color: 'Royal Blue & Gold Zari',
-        fabric: 'Pure Banarasi Silk',
-        cost_price: 2400,
-        selling_price: 4999,
-        stock_quantity: 24,
-        min_stock_alert: 5,
-        barcode: '890123456001',
-        status: 'active',
-      },
-      {
-        name: 'Raymond Premium Cotton Formal Shirt',
-        sku: 'SHIRT-RAY-002',
-        category: "Men's Wear",
-        size: '40 (L)',
-        color: 'Sky Blue Crisp',
-        fabric: '100% Giza Cotton',
-        cost_price: 750,
-        selling_price: 1599,
-        stock_quantity: 45,
-        min_stock_alert: 8,
-        barcode: '890123456002',
-        status: 'active',
-      },
-      {
-        name: 'Designer Anarkali Kurti Set with Dupatta',
-        sku: 'KURTI-ANAR-003',
-        category: "Women's Ethnic & Sarees",
-        size: '38 (M)',
-        color: 'Maroon & Gold',
-        fabric: 'Georgette with Embroidery',
-        cost_price: 1200,
-        selling_price: 2499,
-        stock_quantity: 18,
-        min_stock_alert: 4,
-        barcode: '890123456003',
-        status: 'active',
-      },
-      {
-        name: 'Slim Fit Stretch Denim Jeans',
-        sku: 'JEAN-DEN-004',
-        category: "Men's Wear",
-        size: '32',
-        color: 'Dark Indigo Blue',
-        fabric: 'Stretch Cotton Denim',
-        cost_price: 850,
-        selling_price: 1899,
-        stock_quantity: 35,
-        min_stock_alert: 6,
-        barcode: '890123456004',
-        status: 'active',
-      },
-      {
-        name: 'Kids Festive Kurta Pajama Jacket Set',
-        sku: 'KIDS-FEST-005',
-        category: "Kids' Wear",
-        size: 'Age 6-8 Yrs',
-        color: 'Mustard Yellow & White',
-        fabric: 'Art Silk Blend',
-        cost_price: 600,
-        selling_price: 1299,
-        stock_quantity: 20,
-        min_stock_alert: 5,
-        barcode: '890123456005',
-        status: 'active',
-      },
-      {
-        name: 'Italian Wool Blend Suit Fabric (3 Meters)',
-        sku: 'FAB-SUIT-006',
-        category: 'Suitings & Shirtings Fabric',
-        size: '3.0 Meters',
-        color: 'Charcoal Grey Houndstooth',
-        fabric: 'Terry Wool Blend',
-        cost_price: 1800,
-        selling_price: 3600,
-        stock_quantity: 15,
-        min_stock_alert: 3,
-        barcode: '890123456006',
-        status: 'active',
-      },
-    ];
-
-    await Product.insertMany(sampleProducts);
-    console.log(`[Database] Seeded ${sampleProducts.length} initial garment store inventory products.`);
-  }
-
-  // 4. Initial Sample Suppliers & Customers
-  const supplierCount = await Supplier.countDocuments();
-  if (supplierCount === 0) {
-    await Supplier.create({
-      name: 'Rameshwaram Mills Ltd',
-      company_name: 'Surat Textile Hub',
-      phone: '+91 98221 44556',
-      email: 'sales@surattextilehub.com',
-      address: 'Ring Road Textile Market, Surat, Gujarat',
-      gst_number: '24AAAAA0000A1Z5',
-    });
-  }
-
-  const customerCount = await Customer.countDocuments();
-  if (customerCount === 0) {
-    await Customer.create({
-      name: 'Rajesh Khanna',
-      phone: '+91 98989 12345',
-      email: 'rajesh.k@gmail.com',
-      address: 'Main Market Society, Flat 4B',
-      total_purchases: 8598,
-    });
-  }
-
-  // 5. Clean up expired sessions safely without touching active sessions
+  // Clean up expired sessions without touching active sessions or business records.
   try {
     await Session.deleteMany({ expires_at: { $lt: new Date() } });
   } catch (sessErr) {
     console.warn('[Database] Expired sessions housekeeping skipped:', sessErr);
   }
 
-  // 6. Safe idempotent administrator check: only initialize if no Super Admin exists
+  // Create an initial owner only when explicit credentials are provided.
   await ensureInitialAdmin();
 }
 
@@ -316,137 +204,55 @@ export async function initDatabase(): Promise<void> {
  * Never overwrites or resets existing administrators.
  */
 export async function ensureInitialAdmin(): Promise<void> {
-  try {
-    const existingAdmin = await User.findOne({ role: 'SUPER_ADMIN' });
-
-    if (existingAdmin) {
-      // Super admin exists; preserve existing administrator credentials safely
-      return;
-    }
-
-    const email = process.env.ADMIN_EMAIL || process.env.INITIAL_ADMIN_EMAIL || 'hmrajpal11@gmail.com';
-    const password = process.env.ADMIN_PASSWORD || process.env.INITIAL_ADMIN_PASSWORD || 'HMRajpal@89565';
-    const username = process.env.ADMIN_USERNAME || process.env.INITIAL_ADMIN_USERNAME || 'hmrajpal';
-
-    const passwordHash = hashPassword(password);
-    await User.create({
-      username,
-      email: email.toLowerCase().trim(),
-      password_hash: passwordHash,
-      role: 'SUPER_ADMIN',
-      employee_id: null,
-      status: 'active',
-      created_at: new Date(),
-    });
-
-    await logAudit(
-      username,
-      'System Setup',
-      'SUPER_ADMIN_INITIALIZED',
-      'users',
-      '',
-      `Initial Super Admin owner initialized from configuration (${email})`
-    );
-    console.log(`[Database] Initial Super Admin account created: ${email}`);
-  } catch (err: any) {
-    console.error('[Database Warning] ensureInitialAdmin check failed:', err?.message || err);
-  }
-}
-
-/**
- * Seeds employees up to targetCount in MongoDB.
- */
-export async function seedWorkersUpTo(targetCount = 100): Promise<number> {
-  const currentCount = await Employee.countDocuments();
-  if (currentCount >= targetCount) {
-    return currentCount;
+  const existingAdmin = await User.findOne({ role: 'SUPER_ADMIN' });
+  if (existingAdmin) {
+    return;
   }
 
-  console.log(`Seeding garment store workers from ${currentCount} up to ${targetCount} in MongoDB...`);
+  const email = (process.env.ADMIN_EMAIL || process.env.INITIAL_ADMIN_EMAIL || '').trim().toLowerCase();
+  const password = process.env.ADMIN_PASSWORD || process.env.INITIAL_ADMIN_PASSWORD || '';
+  const username = (process.env.ADMIN_USERNAME || process.env.INITIAL_ADMIN_USERNAME || '').trim();
 
-  const firstNames = [
-    'Rajesh', 'Sunil', 'Manoj', 'Deepak', 'Sanjay', 'Anil', 'Vijay', 'Pooja', 'Ritu', 'Kavita',
-    'Mohit', 'Dinesh', 'Ramesh', 'Suresh', 'Kiran', 'Neeraj', 'Vikas', 'Gaurav', 'Alok', 'Pankaj',
-    'Jyoti', 'Meena', 'Sunita', 'Manju', 'Rekha', 'Rohit', 'Ashok', 'Kunal', 'Sachin', 'Naveen'
-  ];
-
-  const lastNames = [
-    'Sharma', 'Verma', 'Gupta', 'Singh', 'Patel', 'Jain', 'Agarwal', 'Kumar', 'Mishra', 'Yadav',
-    'Chauhan', 'Pandey', 'Saxena', 'Mehta', 'Bhatia', 'Khurana', 'Malhotra', 'Kapoor', 'Seth', 'Bansal'
-  ];
-
-  const deptRoles = [
-    { dept: 'Sales', desig: 'Senior Sales Associate', salary: 800, ot: 150 },
-    { dept: 'Sales', desig: 'Men\'s Wear Specialist', salary: 750, ot: 140 },
-    { dept: 'Sales', desig: 'Women\'s Saree & Suits Associate', salary: 850, ot: 160 },
-    { dept: 'Sales', desig: 'Kids & Casual Section Attendant', salary: 700, ot: 130 },
-    { dept: 'Billing', desig: 'POS Billing Operator', salary: 900, ot: 170 },
-    { dept: 'Cashier', desig: 'Counter Cashier', salary: 850, ot: 160 },
-    { dept: 'Stock Management', desig: 'Godown & Inventory Supervisor', salary: 800, ot: 150 },
-    { dept: 'Alteration & Tailoring', desig: 'Master Tailor', salary: 900, ot: 175 },
-    { dept: 'Store Operations', desig: 'Floor Helper & Packaging Attendant', salary: 650, ot: 120 }
-  ];
-
-  const avatarPool = [
-    'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150',
-    'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150',
-    'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150',
-    'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
-    'https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=150'
-  ];
-
-  const employeesToInsert = [];
-  const usersToInsert = [];
-
-  for (let i = currentCount + 1; i <= targetCount; i++) {
-    const empId = `EMP${String(i).padStart(3, '0')}`;
-    const fn = firstNames[(i * 3 + 7) % firstNames.length];
-    const ln = lastNames[(i * 7 + 11) % lastNames.length];
-    const fullName = `${fn} ${ln}`;
-    const conf = deptRoles[(i - 1) % deptRoles.length];
-    const phone = `+91 98${String((i * 8831) % 89999 + 10000)} ${String((i * 4729) % 89999 + 10000).slice(0, 4)}`;
-    const email = `emp${String(i).padStart(3, '0')}@rajpalgarments.com`;
-    const address = `Cloth Market Staff Quarters, Unit ${10 + (i % 40)}`;
-    const joinDate = '2024-01-15';
-    const avatar = avatarPool[i % avatarPool.length];
-    const monthly = conf.salary * 26;
-
-    employeesToInsert.push({
-      employee_id: empId,
-      name: fullName,
-      phone,
-      email,
-      address,
-      department: conf.dept,
-      designation: conf.desig,
-      joining_date: joinDate,
-      per_day_salary: conf.salary,
-      monthly_salary: monthly,
-      overtime_rate: conf.ot,
-      status: 'active',
-      avatar_url: avatar,
-      created_at: new Date(),
-    });
-
-    const username = `worker${i}`;
-    usersToInsert.push({
-      username,
-      email,
-      password_hash: hashPassword(`worker${i}123`),
-      role: 'EMPLOYEE',
-      employee_id: empId,
-      status: 'active',
-      created_at: new Date(),
-    });
+  if (!email || !password || !username) {
+    console.warn('[Database] No Super Admin exists. Configure ADMIN_EMAIL, ADMIN_PASSWORD, and ADMIN_USERNAME or run npm run setup:admin.');
+    return;
   }
 
-  if (employeesToInsert.length > 0) {
-    await Employee.insertMany(employeesToInsert);
-    await User.insertMany(usersToInsert);
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new Error('ADMIN_EMAIL must be a valid email address when creating the initial Super Admin.');
+  }
+  if (username.length < 3 || username.length > 50) {
+    throw new Error('ADMIN_USERNAME must be between 3 and 50 characters when creating the initial Super Admin.');
+  }
+  if (password.length < 12) {
+    throw new Error('ADMIN_PASSWORD must be at least 12 characters when creating the initial Super Admin.');
   }
 
-  console.log(`Successfully added ${targetCount} staff members to MongoDB.`);
-  return targetCount;
+  const existingUser = await User.findOne({ $or: [{ email }, { username }] });
+  if (existingUser) {
+    console.warn('[Database] Initial Super Admin was not created because the configured email or username already belongs to an account. Use the authorized setup command to manage it.');
+    return;
+  }
+
+  await User.create({
+    username,
+    email,
+    password_hash: hashPassword(password),
+    role: 'SUPER_ADMIN',
+    employee_id: null,
+    status: 'active',
+    created_at: new Date(),
+  });
+
+  await logAudit(
+    username,
+    'System Setup',
+    'SUPER_ADMIN_INITIALIZED',
+    'users',
+    '',
+    'Initial Super Admin owner initialized from explicit environment configuration'
+  );
+  console.log('[Database] Initial Super Admin account created from explicit environment configuration.');
 }
 
 /**
