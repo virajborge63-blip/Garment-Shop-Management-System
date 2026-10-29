@@ -24,6 +24,64 @@ function isProductionEnvironment(): boolean {
     process.env.npm_lifecycle_event === 'start';
 }
 
+function getMongoConnectionDiagnostics(error: unknown): Array<{ name: string; code?: string | number }> {
+  const diagnostics: Array<{ name: string; code?: string | number }> = [];
+  const pending: unknown[] = [error];
+  const seen = new Set<object>();
+
+  while (pending.length > 0 && diagnostics.length < 5) {
+    const current = pending.shift();
+    if (!current || typeof current !== 'object' || seen.has(current)) {
+      continue;
+    }
+
+    seen.add(current);
+    const value = current as {
+      name?: unknown;
+      code?: unknown;
+      cause?: unknown;
+      errors?: unknown;
+      reason?: unknown;
+      error?: unknown;
+      servers?: unknown;
+    };
+    const diagnostic: { name: string; code?: string | number } = {
+      name: typeof value.name === 'string' && /^[A-Za-z][A-Za-z0-9_]{0,79}$/.test(value.name)
+        ? value.name
+        : 'MongoConnectionError',
+    };
+    if (
+      typeof value.code === 'number' ||
+      (typeof value.code === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(value.code))
+    ) {
+      diagnostic.code = value.code;
+    }
+    diagnostics.push(diagnostic);
+
+    if (value.cause) {
+      pending.push(value.cause);
+    }
+    if (value.reason) {
+      pending.push(value.reason);
+    }
+    if (value.error) {
+      pending.push(value.error);
+    }
+    if (Array.isArray(value.errors)) {
+      pending.push(...value.errors);
+    }
+    if (value.servers instanceof Map) {
+      for (const server of value.servers.values()) {
+        if (server && typeof server === 'object' && 'error' in server) {
+          pending.push(server.error);
+        }
+      }
+    }
+  }
+
+  return diagnostics;
+}
+
 /**
  * Connect to MongoDB using Mongoose.
  * Supports:
@@ -58,8 +116,11 @@ export async function connectDB(): Promise<typeof mongoose> {
       isConnected = true;
       console.log('[Database] MongoDB connection established.');
       return mongoose;
-    } catch {
-      console.error('[Database] Could not connect to the configured MongoDB instance.');
+    } catch (connectionError) {
+      console.error(
+        '[Database] Could not connect to the configured MongoDB instance.',
+        JSON.stringify(getMongoConnectionDiagnostics(connectionError))
+      );
       throw new Error('MongoDB connection failed. Check MONGODB_URI, network access, and database availability.');
     }
   }
