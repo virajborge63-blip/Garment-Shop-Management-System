@@ -1,7 +1,7 @@
 export type Role = 'SUPER_ADMIN' | 'ADMIN' | 'EMPLOYEE';
 
 export interface User {
-  id: number;
+  id: number | string;
   username: string;
   email: string;
   role: Role;
@@ -36,7 +36,7 @@ export interface Employee {
 export type AttendanceStatus = 'Present' | 'Absent' | 'Leave' | 'Half Day';
 
 export interface AttendanceRecord {
-  attendance_id: number;
+  attendance_id: number | string;
   employee_id: string;
   employee_name?: string;
   department?: string;
@@ -54,7 +54,7 @@ export interface AttendanceRecord {
 }
 
 export interface PayrollRecord {
-  payroll_id: number;
+  payroll_id: number | string;
   employee_id: string;
   employee_name?: string;
   department?: string;
@@ -133,7 +133,7 @@ export interface AdminDashboardMetrics {
   };
   recentAttendance: AttendanceRecord[];
   recentEmployeeActivity: Array<{
-    id: number;
+    id: number | string;
     admin_name: string;
     action: string;
     record_affected: string;

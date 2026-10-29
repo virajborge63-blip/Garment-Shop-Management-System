@@ -1,11 +1,12 @@
 import { Router, Request, Response } from 'express';
 import { User, Employee, Session, hashPassword, verifyPassword, logAudit } from '../db.ts';
 import { createSession, authenticateToken, AuthRequest } from '../auth.ts';
+import { authRateLimiter } from '../middleware/rateLimiter.ts';
 
 const router = Router();
 
-// 1. User Login
-router.post('/login', async (req: Request, res: Response) => {
+// 1. User Login (Protected by strict rate limiting)
+router.post('/login', authRateLimiter, async (req: Request, res: Response) => {
   try {
     const identifier = req.body.identifier || req.body.login || req.body.username || req.body.email;
     const password = req.body.password;
@@ -102,7 +103,7 @@ router.post('/login', async (req: Request, res: Response) => {
 });
 
 // 2. Protected Administrator Provisioning Endpoint
-router.post('/setup-admin', async (req: Request, res: Response) => {
+router.post('/setup-admin', authRateLimiter, async (req: Request, res: Response) => {
   try {
     const { email, password, username, setupToken } = req.body;
 
@@ -142,9 +143,14 @@ router.post('/setup-admin', async (req: Request, res: Response) => {
           error: 'Administrator already configured. A valid SETUP_TOKEN is required in the request body to reset administrator credentials, or use CLI: npm run setup:admin --reset.'
         });
       }
-    } else if (configuredSetupToken) {
-      // Even on first setup, if SETUP_TOKEN is set in environment, verify it
-      if (setupToken !== configuredSetupToken) {
+    } else {
+      // First setup: require SETUP_TOKEN if configured or if running in production
+      if (process.env.NODE_ENV === 'production' && !configuredSetupToken) {
+        return res.status(403).json({
+          error: 'SETUP_TOKEN must be configured in environment variables for remote administrator provisioning in production.'
+        });
+      }
+      if (configuredSetupToken && setupToken !== configuredSetupToken) {
         return res.status(403).json({ error: 'Invalid SETUP_TOKEN provided.' });
       }
     }
@@ -201,7 +207,7 @@ router.post('/logout', authenticateToken, async (req: AuthRequest, res: Response
 });
 
 // 5. Forgot Password
-router.post('/forgot-password', (req: Request, res: Response) => {
+router.post('/forgot-password', authRateLimiter, (req: Request, res: Response) => {
   const { email } = req.body;
   if (!email || typeof email !== 'string') {
     return res.status(400).json({ error: 'Valid email address is required.' });

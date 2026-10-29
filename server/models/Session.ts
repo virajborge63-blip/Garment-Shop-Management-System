@@ -21,8 +21,25 @@ const SessionSchema = new Schema<ISession>(
   {
     timestamps: false,
     versionKey: false,
+    toJSON: {
+      virtuals: true,
+      transform: (_doc, ret: any) => {
+        if (ret._id) ret.id = ret._id.toString();
+        return ret;
+      },
+    },
+    toObject: {
+      virtuals: true,
+      transform: (_doc, ret: any) => {
+        if (ret._id) ret.id = ret._id.toString();
+        return ret;
+      },
+    },
   }
 );
+
+// TTL index to automatically purge expired sessions from MongoDB
+SessionSchema.index({ expires_at: 1 }, { expireAfterSeconds: 0 });
 
 export const Session: Model<ISession> = mongoose.models.Session
   ? (mongoose.models.Session as Model<ISession>)

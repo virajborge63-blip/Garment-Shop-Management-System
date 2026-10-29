@@ -5,6 +5,7 @@ import path from 'path';
 import mongoose from 'mongoose';
 import { createServer as createViteServer } from 'vite';
 import { initDatabase } from './server/db.ts';
+import { apiRateLimiter } from './server/middleware/rateLimiter.ts';
 import authRoutes from './server/routes/authRoutes.ts';
 import adminRoutes from './server/routes/adminRoutes.ts';
 import superAdminRoutes from './server/routes/superAdminRoutes.ts';
@@ -24,20 +25,40 @@ async function startServer() {
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-  // Safe CORS middleware: support same-origin as well as client origins
+  // Strict CORS policy: Whitelist localhost, 127.0.0.1, and configured origins
+  const configuredAllowedOrigins = (process.env.ALLOWED_ORIGINS || '')
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean);
+
   app.use((req, res, next) => {
     const origin = req.headers.origin;
     if (origin) {
-      res.setHeader('Access-Control-Allow-Origin', origin);
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      let isAllowed = false;
+
+      // Allow loopback/localhost origins on any port for local development and self-hosting
+      if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+        isAllowed = true;
+      } else if (configuredAllowedOrigins.includes(origin)) {
+        isAllowed = true;
+      }
+
+      if (isAllowed) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
+      }
     }
+
     if (req.method === 'OPTIONS') {
       return res.sendStatus(204);
     }
     next();
   });
+
+  // Apply general API rate limiting to all /api routes
+  app.use('/api', apiRateLimiter);
 
   // Health-check endpoint
   app.get('/api/health', (req, res) => {

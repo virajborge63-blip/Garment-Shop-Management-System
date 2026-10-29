@@ -153,7 +153,9 @@ export const InventoryBillingManagement: React.FC = () => {
     try {
       const res = await fetch('/api/shop/products', { headers: authHeaders });
       const data = await res.json();
-      if (data.products) setProducts(data.products);
+      if (data.products) {
+        setProducts(data.products.map((p: any) => ({ ...p, id: p.id || p._id })));
+      }
     } catch (err) {
       console.error('Error fetching products:', err);
     }
@@ -164,9 +166,10 @@ export const InventoryBillingManagement: React.FC = () => {
       const res = await fetch('/api/shop/categories', { headers: authHeaders });
       const data = await res.json();
       if (data.categories) {
-        setCategories(data.categories);
-        if (data.categories.length > 0 && !productForm.category) {
-          setProductForm((prev) => ({ ...prev, category: data.categories[0].name }));
+        const mapped = data.categories.map((c: any) => ({ ...c, id: c.id || c._id }));
+        setCategories(mapped);
+        if (mapped.length > 0 && !productForm.category) {
+          setProductForm((prev) => ({ ...prev, category: mapped[0].name }));
         }
       }
     } catch (err) {
@@ -178,7 +181,9 @@ export const InventoryBillingManagement: React.FC = () => {
     try {
       const res = await fetch('/api/shop/sales', { headers: authHeaders });
       const data = await res.json();
-      if (data.sales) setSales(data.sales);
+      if (data.sales) {
+        setSales(data.sales.map((s: any) => ({ ...s, id: s.id || s._id })));
+      }
     } catch (err) {
       console.error('Error fetching sales:', err);
     }
@@ -188,7 +193,9 @@ export const InventoryBillingManagement: React.FC = () => {
     try {
       const res = await fetch('/api/shop/suppliers', { headers: authHeaders });
       const data = await res.json();
-      if (data.suppliers) setSuppliers(data.suppliers);
+      if (data.suppliers) {
+        setSuppliers(data.suppliers.map((s: any) => ({ ...s, id: s.id || s._id })));
+      }
     } catch (err) {
       console.error('Error fetching suppliers:', err);
     }
@@ -196,19 +203,20 @@ export const InventoryBillingManagement: React.FC = () => {
 
   // Cart operations
   const addToCart = (product: ProductItem) => {
+    const prodId = product.id || (product as any)._id;
     if (product.stock_quantity <= 0) {
       alert('This garment item is out of stock!');
       return;
     }
     setCart((prev) => {
-      const existing = prev.find((item) => item.product_id === product.id);
+      const existing = prev.find((item) => item.product_id === prodId);
       if (existing) {
         if (existing.quantity >= product.stock_quantity) {
           alert(`Cannot add more than available stock (${product.stock_quantity})!`);
           return prev;
         }
         return prev.map((item) =>
-          item.product_id === product.id
+          item.product_id === prodId
             ? { ...item, quantity: item.quantity + 1, total: (item.quantity + 1) * item.unit_price }
             : item
         );
@@ -216,7 +224,7 @@ export const InventoryBillingManagement: React.FC = () => {
       return [
         ...prev,
         {
-          product_id: product.id,
+          product_id: prodId,
           name: product.name,
           sku: product.sku,
           size: product.size,

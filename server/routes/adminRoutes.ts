@@ -213,12 +213,33 @@ router.get('/dashboard', async (req: AuthRequest, res: Response) => {
 // ==========================================
 router.get('/employees', async (req: AuthRequest, res: Response) => {
   try {
+    const { search, department, status } = req.query;
+    const filter: any = {};
+
+    if (status && status !== 'All') {
+      filter.status = status;
+    }
+    if (department && department !== 'All') {
+      filter.department = department;
+    }
+    if (search && typeof search === 'string' && search.trim()) {
+      const s = search.trim();
+      const regex = new RegExp(s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      filter.$or = [
+        { name: regex },
+        { employee_id: regex },
+        { email: regex },
+        { designation: regex },
+        { phone: regex },
+      ];
+    }
+
     const now = new Date();
     const currentMonth = now.getMonth() + 1;
     const currentYear = now.getFullYear();
     const monthPrefix = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
 
-    const employees = await Employee.find().sort({ employee_id: 1 });
+    const employees = await Employee.find(filter).sort({ employee_id: 1 });
     const monthAtt = await Attendance.find({ date: new RegExp(`^${monthPrefix}`) });
 
     // Aggregate monthly attendance per employee
@@ -448,61 +469,136 @@ router.delete('/employees/:id', async (req: AuthRequest, res: Response) => {
 // ==========================================
 // 3. DAILY ROSTER ATTENDANCE
 // ==========================================
-router.get('/attendance/date/:date', async (req: AuthRequest, res: Response) => {
+
+// Helper function to generate attendance roster for a specific date
+async function getAttendanceRoster(targetDate: string) {
+  const employees = await Employee.find({ status: 'active' }).sort({ employee_id: 1 });
+  const attendanceRecords = await Attendance.find({ date: targetDate });
+
+  const attMap = new Map(attendanceRecords.map((r) => [r.employee_id, r]));
+
+  const roster = employees.map((emp) => {
+    const att = attMap.get(emp.employee_id);
+    return {
+      attendance_id: att?._id.toString() || null,
+      employee_id: emp.employee_id,
+      name: emp.name,
+      department: emp.department,
+      designation: emp.designation,
+      avatar_url: emp.avatar_url,
+      status: att ? att.status : 'Present',
+      working_hours: att ? att.working_hours : 8,
+      overtime_hours: att ? att.overtime_hours : 0,
+      notes: att?.notes || '',
+    };
+  });
+
+  let presentCount = 0;
+  let absentCount = 0;
+  let leaveCount = 0;
+  let halfDayCount = 0;
+
+  roster.forEach((r) => {
+    if (r.status === 'Present') presentCount++;
+    else if (r.status === 'Absent') absentCount++;
+    else if (r.status === 'Leave') leaveCount++;
+    else if (r.status === 'Half Day') halfDayCount++;
+  });
+
+  return {
+    date: targetDate,
+    summary: {
+      totalEmployees: roster.length,
+      present: presentCount,
+      absent: absentCount,
+      leave: leaveCount,
+      halfDay: halfDayCount,
+    },
+    roster,
+  };
+}
+
+// 3a. Get Attendance Roster by query ?date=YYYY-MM-DD
+router.get('/attendance/roster', async (req: AuthRequest, res: Response) => {
   try {
-    const targetDate = req.params.date; // YYYY-MM-DD
-    const employees = await Employee.find({ status: 'active' }).sort({ employee_id: 1 });
-    const attendanceRecords = await Attendance.find({ date: targetDate });
-
-    const attMap = new Map(attendanceRecords.map((r) => [r.employee_id, r]));
-
-    const roster = employees.map((emp) => {
-      const att = attMap.get(emp.employee_id);
-      return {
-        attendance_id: att?._id.toString() || null,
-        employee_id: emp.employee_id,
-        name: emp.name,
-        department: emp.department,
-        designation: emp.designation,
-        avatar_url: emp.avatar_url,
-        status: att ? att.status : 'Present',
-        working_hours: att ? att.working_hours : 8,
-        overtime_hours: att ? att.overtime_hours : 0,
-        notes: att?.notes || '',
-      };
-    });
-
-    let presentCount = 0;
-    let absentCount = 0;
-    let leaveCount = 0;
-    let halfDayCount = 0;
-
-    roster.forEach((r) => {
-      if (r.status === 'Present') presentCount++;
-      else if (r.status === 'Absent') absentCount++;
-      else if (r.status === 'Leave') leaveCount++;
-      else if (r.status === 'Half Day') halfDayCount++;
-    });
-
-    return res.json({
-      date: targetDate,
-      summary: {
-        totalEmployees: roster.length,
-        present: presentCount,
-        absent: absentCount,
-        leave: leaveCount,
-        halfDay: halfDayCount,
-      },
-      roster,
-    });
+    const targetDate = String(req.query.date || new Date().toISOString().split('T')[0]);
+    const data = await getAttendanceRoster(targetDate);
+    return res.json(data);
   } catch (err: any) {
     console.error('Error fetching attendance roster:', err);
     return res.status(500).json({ error: 'Failed to retrieve attendance roster.' });
   }
 });
 
-// Bulk Attendance Update
-router.post('/attendance/bulk', async (req: AuthRequest, res: Response) => {
+// 3b. Get Attendance Roster by path parameter /date/:date (alias)
+router.get('/attendance/date/:date', async (req: AuthRequest, res: Response) => {
+  try {
+    const targetDate = req.params.date;
+    const data = await getAttendanceRoster(targetDate);
+    return res.json(data);
+  } catch (err: any) {
+    console.error('Error fetching attendance roster:', err);
+    return res.status(500).json({ error: 'Failed to retrieve attendance roster.' });
+  }
+});
+
+// 3c. Get Filtered Attendance History (supports date, month, year, employee_id, status)
+router.get('/attendance', async (req: AuthRequest, res: Response) => {
+  try {
+    const { date, month, year, employee_id, status } = req.query;
+    const filter: any = {};
+
+    if (date && typeof date === 'string') {
+      filter.date = date;
+    } else if (month && year) {
+      const mStr = `${year}-${String(month).padStart(2, '0')}`;
+      filter.date = new RegExp(`^${mStr}`);
+    }
+
+    if (employee_id && employee_id !== 'All') {
+      filter.employee_id = String(employee_id).toUpperCase();
+    }
+
+    if (status && status !== 'All') {
+      filter.status = status;
+    }
+
+    const records = await Attendance.find(filter).sort({ date: -1, employee_id: 1 });
+    const employees = await Employee.find();
+    const empMap = new Map(employees.map((e) => [e.employee_id, e]));
+
+    const enriched = records.map((r) => {
+      const emp = empMap.get(r.employee_id);
+      const d = new Date(r.date);
+      const dayName = isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-US', { weekday: 'short' });
+      return {
+        attendance_id: r._id.toString(),
+        employee_id: r.employee_id,
+        employee_name: emp?.name || r.employee_id,
+        department: emp?.department || '',
+        designation: emp?.designation || '',
+        avatar_url: emp?.avatar_url || '',
+        date: r.date,
+        day: dayName,
+        status: r.status,
+        working_hours: r.working_hours,
+        overtime_hours: r.overtime_hours,
+        notes: r.notes || '',
+        created_by: r.created_by,
+        updated_by: r.updated_by,
+        updated_at: r.updated_at ? r.updated_at.toISOString() : undefined,
+      };
+    });
+
+    return res.json({ attendance: enriched });
+  } catch (err: any) {
+    console.error('Error fetching attendance list:', err);
+    return res.status(500).json({ error: 'Failed to retrieve attendance records.' });
+  }
+});
+
+// Helper for saving batch attendance
+async function handleBatchAttendance(req: AuthRequest, res: Response) {
   try {
     const { date, records } = req.body;
     if (!date || !Array.isArray(records)) {
@@ -552,10 +648,14 @@ router.post('/attendance/bulk', async (req: AuthRequest, res: Response) => {
     console.error('Bulk attendance error:', err);
     return res.status(500).json({ error: 'Failed to save bulk attendance.' });
   }
-});
+}
 
-// Single Attendance Update
-router.post('/attendance/single', async (req: AuthRequest, res: Response) => {
+// 3d. Bulk/Batch Attendance Update (supports both /attendance/batch and /attendance/bulk)
+router.post('/attendance/batch', handleBatchAttendance);
+router.post('/attendance/bulk', handleBatchAttendance);
+
+// Helper for saving single attendance
+async function handleSingleAttendance(req: AuthRequest, res: Response) {
   try {
     const { employee_id, date, status, working_hours, overtime_hours, notes } = req.body;
 
@@ -589,6 +689,34 @@ router.post('/attendance/single', async (req: AuthRequest, res: Response) => {
     return res.json({ success: true, message: `Attendance updated for ${employee_id} on ${date}.` });
   } catch (err: any) {
     return res.status(500).json({ error: 'Failed to update attendance record.' });
+  }
+}
+
+// 3e. Single Attendance Update (supports both /attendance and /attendance/single)
+router.post('/attendance', handleSingleAttendance);
+router.post('/attendance/single', handleSingleAttendance);
+
+// 3f. Delete Attendance Record
+router.delete('/attendance/:id', async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const deleted = await Attendance.findByIdAndDelete(id);
+    if (!deleted) {
+      return res.status(404).json({ error: 'Attendance record not found.' });
+    }
+
+    await logAudit(
+      req.user!.username,
+      req.user!.name || 'Admin',
+      'ATTENDANCE_DELETED',
+      `Attendance #${id} (${deleted.employee_id})`,
+      `Date: ${deleted.date}, Status: ${deleted.status}`,
+      'Record deleted'
+    );
+
+    return res.json({ success: true, message: 'Attendance record deleted successfully.' });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Failed to delete attendance record.' });
   }
 });
 
@@ -801,6 +929,85 @@ router.put('/payroll/status', async (req: AuthRequest, res: Response) => {
   }
 });
 
+// Finalize All Payroll Records for a month/year
+router.post('/payroll/finalize-all', async (req: AuthRequest, res: Response) => {
+  try {
+    const { month, year } = req.body;
+    const now = new Date();
+    const qMonth = month ? parseInt(String(month), 10) : (now.getMonth() + 1);
+    const qYear = year ? parseInt(String(year), 10) : now.getFullYear();
+
+    const result = await Payroll.updateMany(
+      { month: qMonth, year: qYear },
+      { $set: { status: 'Finalized' } }
+    );
+
+    await logAudit(
+      req.user!.username,
+      req.user!.name || 'Admin',
+      'PAYROLL_FINALIZED_ALL',
+      `Period: ${qMonth}/${qYear}`,
+      '',
+      `Finalized ${result.modifiedCount} payroll records for ${qMonth}/${qYear}`
+    );
+
+    return res.json({
+      success: true,
+      message: `Successfully finalized ${result.modifiedCount} payroll records for ${qMonth}/${qYear}.`,
+      modifiedCount: result.modifiedCount,
+    });
+  } catch (err: any) {
+    console.error('Finalize all payroll error:', err);
+    return res.status(500).json({ error: 'Failed to finalize payroll records.' });
+  }
+});
+
+// Edit Payroll Record (bonus, deductions, status adjustment)
+router.put('/payroll/:id', async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { bonus, deductions, status } = req.body;
+
+    const record = await Payroll.findById(id);
+    if (!record) {
+      return res.status(404).json({ error: 'Payroll record not found.' });
+    }
+
+    const newBonus = bonus !== undefined ? Math.max(0, parseFloat(bonus) || 0) : record.bonus;
+    const newDeductions = deductions !== undefined ? Math.max(0, parseFloat(deductions) || 0) : record.deductions;
+    if (status && ['Draft', 'Finalized', 'Paid'].includes(status)) {
+      record.status = status as 'Draft' | 'Finalized' | 'Paid';
+    }
+
+    record.bonus = newBonus;
+    record.deductions = newDeductions;
+    record.net_salary = Math.max(
+      0,
+      record.basic_salary + record.extra_day_salary + record.overtime_salary + newBonus - newDeductions
+    );
+
+    await record.save();
+
+    await logAudit(
+      req.user!.username,
+      req.user!.name || 'Admin',
+      'PAYROLL_EDITED',
+      `Payroll #${id} (${record.employee_id})`,
+      `Net: ₹${record.net_salary}`,
+      `Bonus: ₹${newBonus}, Deductions: ₹${newDeductions}, Net: ₹${record.net_salary}, Status: ${record.status}`
+    );
+
+    return res.json({
+      success: true,
+      message: `Payroll for ${record.employee_id} updated successfully.`,
+      payroll: record,
+    });
+  } catch (err: any) {
+    console.error('Update payroll error:', err);
+    return res.status(500).json({ error: 'Failed to update payroll record.' });
+  }
+});
+
 // ==========================================
 // 5. EXECUTIVE REPORTS
 // ==========================================
@@ -979,17 +1186,26 @@ router.get('/settings', async (req: AuthRequest, res: Response) => {
 
 router.post('/settings', async (req: AuthRequest, res: Response) => {
   try {
-    const newSettings = req.body;
-    if (!newSettings || typeof newSettings !== 'object') {
+    const rawPayload = req.body;
+    if (!rawPayload || typeof rawPayload !== 'object') {
       return res.status(400).json({ error: 'Invalid settings payload.' });
     }
 
-    for (const [key, val] of Object.entries(newSettings)) {
-      await Setting.findOneAndUpdate(
-        { key },
-        { $set: { value: String(val) } },
-        { upsert: true }
-      );
+    // Support both direct key-value map and nested { settings: { ... } } wrapper
+    const settingsMap = rawPayload.settings && typeof rawPayload.settings === 'object'
+      ? rawPayload.settings
+      : rawPayload;
+
+    let updatedCount = 0;
+    for (const [key, val] of Object.entries(settingsMap)) {
+      if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean') {
+        await Setting.findOneAndUpdate(
+          { key },
+          { $set: { value: String(val) } },
+          { upsert: true }
+        );
+        updatedCount++;
+      }
     }
 
     await logAudit(
@@ -998,7 +1214,7 @@ router.post('/settings', async (req: AuthRequest, res: Response) => {
       'STORE_SETTINGS_UPDATED',
       'System Settings',
       '',
-      `Updated ${Object.keys(newSettings).length} store configuration keys`
+      `Updated ${updatedCount} store configuration keys`
     );
 
     return res.json({ success: true, message: 'Settings saved successfully.' });

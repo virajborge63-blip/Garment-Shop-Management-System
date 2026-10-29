@@ -400,45 +400,97 @@ router.post('/sales', async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ error: 'At least one item is required to generate a bill.' });
     }
 
-    // Generate unique Bill Number: INV-YYYYMMDD-XXXX
+    // Step 1: Server-side validation of items, stock levels, and authorized prices
+    let subtotal = 0;
+    const validatedItems: Array<{
+      product_id: string;
+      name: string;
+      sku: string;
+      size: string;
+      quantity: number;
+      unit_price: number;
+      total: number;
+    }> = [];
+
+    for (const item of items) {
+      const qty = parseInt(String(item.quantity), 10);
+      if (isNaN(qty) || qty <= 0) {
+        return res.status(400).json({
+          error: `Invalid quantity for item "${item.name || 'Item'}". Quantity must be a positive integer greater than zero.`
+        });
+      }
+
+      if (item.product_id) {
+        const prod = await Product.findById(item.product_id);
+        if (!prod) {
+          return res.status(400).json({ error: `Product with ID ${item.product_id} was not found in store catalog.` });
+        }
+
+        if (prod.status === 'discontinued') {
+          return res.status(400).json({ error: `Product "${prod.name}" (${prod.sku}) has been discontinued and cannot be sold.` });
+        }
+
+        if (prod.stock_quantity < qty) {
+          return res.status(400).json({
+            error: `Insufficient stock for "${prod.name}" (${prod.sku}). Available stock: ${prod.stock_quantity}, requested: ${qty}.`
+          });
+        }
+
+        // Server is the single source of truth for retail price
+        const verifiedPrice = prod.selling_price;
+        const itemTotal = qty * verifiedPrice;
+        subtotal += itemTotal;
+
+        validatedItems.push({
+          product_id: prod._id.toString(),
+          name: prod.name,
+          sku: prod.sku,
+          size: prod.size || item.size || 'Free Size',
+          quantity: qty,
+          unit_price: verifiedPrice,
+          total: itemTotal,
+        });
+      } else {
+        // Fallback for custom / miscellaneous walk-in items without barcode/SKU
+        const customPrice = Math.max(0, parseFloat(item.unit_price) || 0);
+        const itemTotal = qty * customPrice;
+        subtotal += itemTotal;
+
+        validatedItems.push({
+          product_id: '',
+          name: (item.name || 'Garment Item').trim(),
+          sku: 'MISC-ITEM',
+          size: item.size || 'Free Size',
+          quantity: qty,
+          unit_price: customPrice,
+          total: itemTotal,
+        });
+      }
+    }
+
+    // Step 2: Atomically decrement stock for validated catalog products
+    for (const item of validatedItems) {
+      if (item.product_id) {
+        await Product.findOneAndUpdate(
+          { _id: item.product_id, stock_quantity: { $gte: item.quantity } },
+          { $inc: { stock_quantity: -item.quantity } }
+        );
+      }
+    }
+
+    // Step 3: Validate discount and taxes
+    const rawDiscount = parseFloat(discount) || 0;
+    const disc = Math.min(Math.max(0, rawDiscount), subtotal); // Discount cannot exceed subtotal
+    const taxAmt = Math.max(0, parseFloat(tax) || 0);
+    const totalAmount = Math.max(0, Math.round((subtotal - disc + taxAmt) * 100) / 100);
+    const cashier = cashier_name || req.user!.name || req.user!.username || 'Billing Desk';
+
+    // Step 4: Generate unique Bill Number: INV-YYYYMMDD-XXXX
     const todayStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
     const countToday = await Sale.countDocuments({
       date: { $gte: new Date(new Date().setHours(0, 0, 0, 0)) },
     });
     const billNumber = `INV-${todayStr}-${String(countToday + 1).padStart(4, '0')}`;
-
-    let subtotal = 0;
-    const validatedItems = [];
-
-    // Verify stock and calculate subtotal
-    for (const item of items) {
-      const qty = parseInt(item.quantity, 10) || 1;
-      const price = parseFloat(item.unit_price) || 0;
-      const itemTotal = qty * price;
-      subtotal += itemTotal;
-
-      validatedItems.push({
-        product_id: item.product_id || '',
-        name: item.name || 'Garment Item',
-        sku: item.sku || 'N/A',
-        size: item.size || 'Free Size',
-        quantity: qty,
-        unit_price: price,
-        total: itemTotal,
-      });
-
-      // Atomically decrement product stock if product_id is valid
-      if (item.product_id) {
-        await Product.findByIdAndUpdate(item.product_id, {
-          $inc: { stock_quantity: -qty },
-        });
-      }
-    }
-
-    const disc = parseFloat(discount) || 0;
-    const taxAmt = parseFloat(tax) || 0;
-    const totalAmount = Math.max(0, subtotal - disc + taxAmt);
-    const cashier = cashier_name || req.user!.name || req.user!.username || 'Billing Desk';
 
     const sale = await Sale.create({
       bill_number: billNumber,

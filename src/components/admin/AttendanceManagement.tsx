@@ -340,25 +340,7 @@ export const AttendanceManagement: React.FC = () => {
     }
   };
 
-  // Seed 100+ Workers demonstration
-  const handleSeedWorkers = async () => {
-    try {
-      const token = localStorage.getItem('erp_token');
-      const res = await fetch('/api/admin/seed-100-workers', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to seed workforce');
-
-      setFeedback({ type: 'success', message: data.message });
-      fetchEmployees();
-      fetchRoster(selectedDate);
-    } catch (err: any) {
-      setFeedback({ type: 'error', message: err.message });
-    }
-  };
-
+ 
   // Date stepper
   const changeDateBy = (days: number) => {
     if (hasUnsavedChanges) {
@@ -453,7 +435,7 @@ export const AttendanceManagement: React.FC = () => {
     }
   };
 
-  const handleDeleteRecord = async (attendanceId: number) => {
+  const handleDeleteRecord = async (attendanceId: number | string) => {
     if (!window.confirm('Delete this attendance record?')) return;
     try {
       const token = localStorage.getItem('erp_token');
@@ -563,16 +545,7 @@ export const AttendanceManagement: React.FC = () => {
             </button>
           </div>
 
-          {roster.length < 50 && (
-            <button
-              onClick={handleSeedWorkers}
-              title="Populate 100+ realistic garment workers to test full scale"
-              className="hidden sm:inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold shadow-sm transition-all"
-            >
-              <Sparkles className="w-3.5 h-3.5" />
-              Seed 100+ Workers
-            </button>
-          )}
+         
         </div>
       </div>
 

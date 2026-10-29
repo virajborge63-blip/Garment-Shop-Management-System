@@ -30,7 +30,7 @@ export const EmployeeSalarySlips: React.FC = () => {
     }
   };
 
-  const handleOpenSlip = async (payrollId: number) => {
+  const handleOpenSlip = async (payrollId: number | string) => {
     try {
       const token = localStorage.getItem('erp_token');
       const res = await fetch(`/api/employee/salary-slips/${payrollId}`, {
