@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 import { User, Employee, Session, hashPassword, verifyPassword, logAudit } from '../db.ts';
 import { createSession, authenticateToken, AuthRequest } from '../auth.ts';
 import { authRateLimiter } from '../middleware/rateLimiter.ts';
+import { isProduction } from '../environment.ts';
 
 const router = Router();
 
@@ -113,6 +114,13 @@ router.post('/login', authRateLimiter, async (req: Request, res: Response) => {
 // 2. Protected Administrator Provisioning Endpoint
 router.post('/setup-admin', authRateLimiter, async (req: Request, res: Response) => {
   try {
+    const configuredSetupToken = process.env.SETUP_TOKEN;
+    if (isProduction() && !configuredSetupToken) {
+      return res.status(403).json({
+        error: 'SETUP_TOKEN must be configured in environment variables for remote administrator provisioning in production.'
+      });
+    }
+
     const { email, password, username, setupToken } = req.body;
 
     if (!email || !password) {
@@ -142,8 +150,6 @@ router.post('/setup-admin', authRateLimiter, async (req: Request, res: Response)
     const adminCount = await User.countDocuments({ role: 'SUPER_ADMIN' });
     const hasExistingSuperAdmin = adminCount > 0;
 
-    const configuredSetupToken = process.env.SETUP_TOKEN;
-
     if (hasExistingSuperAdmin) {
       // If a Super Admin already exists, setupToken is strictly required to prevent unauthorized takeover
       if (!configuredSetupToken || setupToken !== configuredSetupToken) {
@@ -152,12 +158,6 @@ router.post('/setup-admin', authRateLimiter, async (req: Request, res: Response)
         });
       }
     } else {
-      // First setup: require SETUP_TOKEN if configured or if running in production
-      if (process.env.NODE_ENV === 'production' && !configuredSetupToken) {
-        return res.status(403).json({
-          error: 'SETUP_TOKEN must be configured in environment variables for remote administrator provisioning in production.'
-        });
-      }
       if (configuredSetupToken && setupToken !== configuredSetupToken) {
         return res.status(403).json({ error: 'Invalid SETUP_TOKEN provided.' });
       }

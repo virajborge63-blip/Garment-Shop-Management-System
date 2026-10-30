@@ -5,6 +5,7 @@ import path from 'path';
 import mongoose from 'mongoose';
 import { createServer as createViteServer } from 'vite';
 import { initDatabase } from './server/db.ts';
+import { isProduction } from './server/environment.ts';
 import { apiRateLimiter } from './server/middleware/rateLimiter.ts';
 import authRoutes from './server/routes/authRoutes.ts';
 import adminRoutes from './server/routes/adminRoutes.ts';
@@ -56,10 +57,7 @@ async function startServer() {
   const app = express();
   const httpServer = http.createServer(app);
   const PORT = Number(process.env.PORT) || 3000;
-  const isProduction =
-    process.env.NODE_ENV === 'production' ||
-    process.argv[1]?.endsWith('server.cjs') ||
-    process.env.npm_lifecycle_event === 'start';
+  const production = isProduction();
 
   // Basic security & parsing
   app.disable('x-powered-by');
@@ -135,7 +133,7 @@ async function startServer() {
   app.use('/api/employee', employeeRoutes);
   app.use('/api/shop', shopRoutes);
 
-  if (!isProduction) {
+  if (!production) {
     const isHmrDisabled = process.env.DISABLE_HMR === 'true';
     const vite = await createViteServer({
       server: {
@@ -179,7 +177,7 @@ async function startServer() {
   });
 
   httpServer.listen(PORT, '0.0.0.0', () => {
-    console.log(`[Server] Garment Shop Management System (MongoDB) listening at http://0.0.0.0:${PORT} (${isProduction ? 'production' : 'development'})`);
+    console.log(`[Server] Garment Shop Management System (MongoDB) listening at http://0.0.0.0:${PORT} (${production ? 'production' : 'development'})`);
   });
 
   void initializeDatabaseWithRetry();

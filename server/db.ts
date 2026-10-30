@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import crypto from 'node:crypto';
 import dotenv from 'dotenv';
 import { MongoMemoryServer } from 'mongodb-memory-server';
+import { isProduction } from './environment.ts';
 
 dotenv.config();
 
@@ -17,12 +18,6 @@ import {
 
 let mongoMemoryServerInstance: MongoMemoryServer | null = null;
 let isConnected = false;
-
-function isProductionEnvironment(): boolean {
-  return process.env.NODE_ENV === 'production' ||
-    process.argv[1]?.endsWith('server.cjs') === true ||
-    process.env.npm_lifecycle_event === 'start';
-}
 
 function getMongoConnectionDiagnostics(error: unknown): Array<{ name: string; code?: string | number }> {
   const diagnostics: Array<{ name: string; code?: string | number }> = [];
@@ -95,19 +90,19 @@ export async function connectDB(): Promise<typeof mongoose> {
   }
 
   const configuredUri = process.env.MONGODB_URI;
-  const isProduction = isProductionEnvironment();
+  const production = isProduction();
 
-  if (isProduction && !configuredUri) {
+  if (production && !configuredUri) {
     throw new Error('MONGODB_URI must be configured in production; in-memory storage is not persistent.');
   }
   if (
-    isProduction &&
+    production &&
     (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32)
   ) {
     throw new Error('SESSION_SECRET must be configured with at least 32 characters in production.');
   }
 
-  const useMemoryFallback = !isProduction;
+  const useMemoryFallback = !production;
 
   if (configuredUri) {
     try {
@@ -119,7 +114,7 @@ export async function connectDB(): Promise<typeof mongoose> {
       console.log('[Database] MongoDB connection established.');
       return mongoose;
     } catch (connectionError) {
-      if (isProduction) {
+      if (production) {
         console.error(
           '[Database] Could not connect to the configured MongoDB instance.',
           JSON.stringify(getMongoConnectionDiagnostics(connectionError))

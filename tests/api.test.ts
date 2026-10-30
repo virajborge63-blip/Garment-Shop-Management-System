@@ -110,6 +110,37 @@ describe('API characterization', () => {
     expect(invalid.body.error).toMatch(/invalid/i);
   });
 
+  it('requires a setup token when production is inferred from the server entry point', async () => {
+    const email = `f06-production-${suffix}@example.test`;
+    const previousNodeEnv = process.env.NODE_ENV;
+    const previousSetupToken = process.env.SETUP_TOKEN;
+    const previousArgv1 = process.argv[1];
+    process.env.NODE_ENV = 'test';
+    delete process.env.SETUP_TOKEN;
+    process.argv[1] = 'C:\\app\\dist\\server.cjs';
+
+    try {
+      const response = await request(app)
+        .post('/api/auth/setup-admin')
+        .send({
+          email,
+          password: 'Secure-test-password-123!',
+          username: `f06-${suffix}`,
+        });
+
+      expect(response.status).toBe(403);
+      expect(await User.exists({ email })).toBeNull();
+    } finally {
+      await User.deleteOne({ email });
+      if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previousNodeEnv;
+      if (previousSetupToken === undefined) delete process.env.SETUP_TOKEN;
+      else process.env.SETUP_TOKEN = previousSetupToken;
+      if (previousArgv1 === undefined) process.argv.splice(1, 1);
+      else process.argv[1] = previousArgv1;
+    }
+  });
+
   it('allows an employee into employee routes and denies admin routes', async () => {
     const profile = await request(app)
       .get('/api/employee/profile')
