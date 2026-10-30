@@ -10,6 +10,7 @@ import {
   logAudit,
 } from '../db.ts';
 import { authenticateToken, requireAdmin, AuthRequest } from '../auth.ts';
+import { getBusinessDate } from '../../shared/businessDate.ts';
 
 const router = Router();
 
@@ -523,7 +524,7 @@ router.post('/sales', async (req: AuthRequest, res: Response) => {
     }
 
     const today = new Date();
-    const dateKey = today.toISOString().slice(0, 10);
+    const dateKey = getBusinessDate(today);
     const invoicePrefix = `INV-${dateKey.replace(/-/g, '')}-`;
     const oldInvoices = await Sale.find({ bill_number: new RegExp(`^${invoicePrefix}`) })
       .select({ bill_number: 1 })

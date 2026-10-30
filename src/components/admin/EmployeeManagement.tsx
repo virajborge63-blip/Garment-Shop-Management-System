@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Employee } from '../../types.ts';
+import { getBusinessDate } from '../../../shared/businessDate.ts';
 import { 
   UserPlus, Search, Filter, Edit3, Trash2, Eye, CheckCircle, 
   XCircle, AlertCircle, Building2, Phone, Mail, MapPin, Calendar, 
@@ -30,7 +31,7 @@ export const EmployeeManagement: React.FC = () => {
     address: '',
     department: 'Sales',
     designation: '',
-    joining_date: new Date().toISOString().split('T')[0],
+    joining_date: getBusinessDate(),
     per_day_salary: 800,
     monthly_salary: 20800,
     overtime_rate: 150,
@@ -179,7 +180,7 @@ export const EmployeeManagement: React.FC = () => {
       address: '',
       department: 'Sales',
       designation: '',
-      joining_date: new Date().toISOString().split('T')[0],
+      joining_date: getBusinessDate(),
       per_day_salary: 800,
       monthly_salary: 20800,
       overtime_rate: 150,

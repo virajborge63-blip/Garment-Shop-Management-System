@@ -10,6 +10,7 @@ import {
   hashPassword,
 } from '../db.ts';
 import { authenticateToken, requireSuperAdmin, AuthRequest } from '../auth.ts';
+import { getBusinessDate, getBusinessDateParts } from '../../shared/businessDate.ts';
 
 const router = Router();
 
@@ -22,10 +23,9 @@ router.use(requireSuperAdmin);
 // ==========================================
 router.get('/overview', async (req: AuthRequest, res: Response) => {
   try {
-    const today = new Date().toISOString().split('T')[0];
     const now = new Date();
-    const currentMonth = now.getMonth() + 1;
-    const currentYear = now.getFullYear();
+    const today = getBusinessDate(now);
+    const { month: currentMonth, year: currentYear } = getBusinessDateParts(now);
     const monthPrefix = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
 
     // 1. Store settings

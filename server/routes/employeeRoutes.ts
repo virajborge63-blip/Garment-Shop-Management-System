@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import { Employee, Attendance, Payroll, Setting } from '../db.ts';
 import { authenticateToken, requireEmployee, AuthRequest } from '../auth.ts';
+import { getBusinessDate, getBusinessDateParts, getWeekdayName } from '../../shared/businessDate.ts';
 
 const router = Router();
 
@@ -14,10 +15,9 @@ router.use(requireEmployee);
 router.get('/dashboard', async (req: AuthRequest, res: Response) => {
   try {
     const employeeId = req.user!.employee_id!;
-    const today = new Date().toISOString().split('T')[0];
     const now = new Date();
-    const currentMonth = now.getMonth() + 1;
-    const currentYear = now.getFullYear();
+    const today = getBusinessDate(now);
+    const { month: currentMonth, year: currentYear } = getBusinessDateParts(now);
     const monthPrefix = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
 
     // Employee profile
@@ -160,8 +160,7 @@ router.get('/attendance', async (req: AuthRequest, res: Response) => {
     const records = await Attendance.find(filter).sort({ date: -1 });
 
     const enriched = records.map((r) => {
-      const d = new Date(r.date);
-      const dayName = d.toLocaleDateString('en-US', { weekday: 'long' });
+      const dayName = getWeekdayName(r.date, 'long');
       return {
         attendance_id: r._id.toString(),
         employee_id: r.employee_id,
@@ -189,9 +188,9 @@ router.get('/salary', async (req: AuthRequest, res: Response) => {
     const employeeId = req.user!.employee_id!;
     const { month, year } = req.query;
 
-    const now = new Date();
-    const qMonth = month ? parseInt(String(month), 10) : (now.getMonth() + 1);
-    const qYear = year ? parseInt(String(year), 10) : now.getFullYear();
+    const businessDate = getBusinessDateParts();
+    const qMonth = month ? parseInt(String(month), 10) : businessDate.month;
+    const qYear = year ? parseInt(String(year), 10) : businessDate.year;
 
     const emp = await Employee.findOne({ employee_id: employeeId });
     if (!emp) {

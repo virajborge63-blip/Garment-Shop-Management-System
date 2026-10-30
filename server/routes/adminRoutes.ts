@@ -11,6 +11,13 @@ import {
   hashPassword,
 } from '../db.ts';
 import { authenticateToken, requireAdmin, AuthRequest } from '../auth.ts';
+import {
+  addCalendarDays,
+  addCalendarMonths,
+  getBusinessDate,
+  getBusinessDateParts,
+  getWeekdayAbbreviation,
+} from '../../shared/businessDate.ts';
 
 const router = Router();
 
@@ -45,10 +52,9 @@ function isDuplicateKeyError(error: unknown): boolean {
 // ==========================================
 router.get('/dashboard', async (req: AuthRequest, res: Response) => {
   try {
-    const today = new Date().toISOString().split('T')[0];
     const now = new Date();
-    const currentMonth = now.getMonth() + 1;
-    const currentYear = now.getFullYear();
+    const today = getBusinessDate(now);
+    const { month: currentMonth, year: currentYear } = getBusinessDateParts(now);
     const monthPrefix = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
 
     // Total Employees
@@ -99,10 +105,8 @@ router.get('/dashboard', async (req: AuthRequest, res: Response) => {
     // Recent 7 Days Attendance Trend Chart
     const dailyAttendance = [];
     for (let i = 6; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      const dateStr = d.toISOString().split('T')[0];
-      const dayName = d.toLocaleDateString('en-US', { weekday: 'short' });
+      const dateStr = addCalendarDays(today, -i);
+      const dayName = getWeekdayAbbreviation(dateStr);
 
       const dayRecs = await Attendance.find({ date: dateStr });
       let p = 0, a = 0, l = 0, h = 0;
@@ -127,9 +131,7 @@ router.get('/dashboard', async (req: AuthRequest, res: Response) => {
     const monthlyComparison = [];
     const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     for (let i = 5; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const m = d.getMonth() + 1;
-      const y = d.getFullYear();
+      const { month: m, year: y } = addCalendarMonths(currentYear, currentMonth, -i);
       const mStr = `${y}-${String(m).padStart(2, '0')}`;
 
       const mRecs = await Attendance.find({ date: new RegExp(`^${mStr}`) });
@@ -260,9 +262,7 @@ router.get('/employees', async (req: AuthRequest, res: Response) => {
       ];
     }
 
-    const now = new Date();
-    const currentMonth = now.getMonth() + 1;
-    const currentYear = now.getFullYear();
+    const { month: currentMonth, year: currentYear } = getBusinessDateParts();
     const monthPrefix = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
 
     const employees = await Employee.find(filter).sort({ employee_id: 1 });
@@ -367,7 +367,7 @@ router.post('/employees', async (req: AuthRequest, res: Response) => {
 
     const mSalary = parseFloat(monthly_salary) || (pSalary * 26);
     const otRate = parseFloat(overtime_rate) || 150;
-    const jDate = joining_date || new Date().toISOString().split('T')[0];
+    const jDate = joining_date || getBusinessDate();
     const defaultAvatar = avatar_url || `https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80`;
 
     const employeeData = {
@@ -670,7 +670,7 @@ async function getAttendanceRoster(targetDate: string) {
 // 3a. Get Attendance Roster by query ?date=YYYY-MM-DD
 router.get('/attendance/roster', async (req: AuthRequest, res: Response) => {
   try {
-    const targetDate = String(req.query.date || new Date().toISOString().split('T')[0]);
+    const targetDate = String(req.query.date || getBusinessDate());
     const data = await getAttendanceRoster(targetDate);
     return res.json(data);
   } catch (err: any) {
@@ -718,8 +718,7 @@ router.get('/attendance', async (req: AuthRequest, res: Response) => {
 
     const enriched = records.map((r) => {
       const emp = empMap.get(r.employee_id);
-      const d = new Date(r.date);
-      const dayName = isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-US', { weekday: 'short' });
+      const dayName = isValidAttendanceDate(r.date) ? getWeekdayAbbreviation(r.date) : '';
       return {
         attendance_id: r._id.toString(),
         employee_id: r.employee_id,
@@ -970,9 +969,9 @@ router.delete('/attendance/:id', async (req: AuthRequest, res: Response) => {
 router.get('/payroll', async (req: AuthRequest, res: Response) => {
   try {
     const { month, year, status } = req.query;
-    const now = new Date();
-    const qMonth = month ? parseInt(String(month), 10) : (now.getMonth() + 1);
-    const qYear = year ? parseInt(String(year), 10) : now.getFullYear();
+    const businessDate = getBusinessDateParts();
+    const qMonth = month ? parseInt(String(month), 10) : businessDate.month;
+    const qYear = year ? parseInt(String(year), 10) : businessDate.year;
 
     const query: any = { month: qMonth, year: qYear };
     if (status && status !== 'All') {
@@ -1043,9 +1042,9 @@ router.get('/payroll', async (req: AuthRequest, res: Response) => {
 router.post('/payroll/generate', async (req: AuthRequest, res: Response) => {
   try {
     const { month, year, employee_id } = req.body;
-    const now = new Date();
-    const qMonth = month ? parseInt(String(month), 10) : (now.getMonth() + 1);
-    const qYear = year ? parseInt(String(year), 10) : now.getFullYear();
+    const businessDate = getBusinessDateParts();
+    const qMonth = month ? parseInt(String(month), 10) : businessDate.month;
+    const qYear = year ? parseInt(String(year), 10) : businessDate.year;
 
     const stdSetting = await Setting.findOne({ key: 'standard_working_days' });
     const standardWorkingDays = stdSetting ? parseFloat(stdSetting.value) : 26;
@@ -1222,9 +1221,9 @@ router.put('/payroll/status', async (req: AuthRequest, res: Response) => {
 router.post('/payroll/finalize-all', async (req: AuthRequest, res: Response) => {
   try {
     const { month, year } = req.body;
-    const now = new Date();
-    const qMonth = month ? parseInt(String(month), 10) : (now.getMonth() + 1);
-    const qYear = year ? parseInt(String(year), 10) : now.getFullYear();
+    const businessDate = getBusinessDateParts();
+    const qMonth = month ? parseInt(String(month), 10) : businessDate.month;
+    const qYear = year ? parseInt(String(year), 10) : businessDate.year;
 
     const result = await Payroll.updateMany(
       { month: qMonth, year: qYear, status: 'Draft' },
@@ -1321,9 +1320,9 @@ router.put('/payroll/:id', async (req: AuthRequest, res: Response) => {
 router.get('/reports', async (req: AuthRequest, res: Response) => {
   try {
     const { type, month, year, department } = req.query;
-    const now = new Date();
-    const qMonth = month ? parseInt(String(month), 10) : (now.getMonth() + 1);
-    const qYear = year ? parseInt(String(year), 10) : now.getFullYear();
+    const businessDate = getBusinessDateParts();
+    const qMonth = month ? parseInt(String(month), 10) : businessDate.month;
+    const qYear = year ? parseInt(String(year), 10) : businessDate.year;
     const monthPrefix = `${qYear}-${String(qMonth).padStart(2, '0')}`;
 
     const empFilter: any = {};

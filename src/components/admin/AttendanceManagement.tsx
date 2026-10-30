@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { AttendanceRecord, Employee, AttendanceStatus, RosterEmployeeRow } from '../../types.ts';
+import { addCalendarDays, getBusinessDate, getBusinessDateParts } from '../../../shared/businessDate.ts';
 import { 
   Calendar as CalendarIcon, CheckCircle2, Clock, 
   Edit2, Trash2, Users, CheckCheck, 
@@ -13,7 +14,7 @@ export const AttendanceManagement: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'roster' | 'records' | 'calendar'>('roster');
 
   // Date selection
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = getBusinessDate();
   const [selectedDate, setSelectedDate] = useState<string>(todayStr);
 
   // Line-by-Line Roster state
@@ -40,8 +41,8 @@ export const AttendanceManagement: React.FC = () => {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [isRecordsLoading, setIsRecordsLoading] = useState(false);
   const [filterMode, setFilterMode] = useState<'date' | 'month'>('date');
-  const [selectedMonth, setSelectedMonth] = useState<number>(new Date().getMonth() + 1);
-  const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
+  const [selectedMonth, setSelectedMonth] = useState<number>(() => getBusinessDateParts().month);
+  const [selectedYear, setSelectedYear] = useState<number>(() => getBusinessDateParts().year);
   const [empFilter, setEmpFilter] = useState('All');
   const [statusFilter, setStatusFilter] = useState('All');
 
@@ -357,9 +358,7 @@ export const AttendanceManagement: React.FC = () => {
         return;
       }
     }
-    const cur = new Date(selectedDate);
-    cur.setDate(cur.getDate() + days);
-    setSelectedDate(cur.toISOString().split('T')[0]);
+    setSelectedDate(addCalendarDays(selectedDate, days));
   };
 
   // Filtered roster rows

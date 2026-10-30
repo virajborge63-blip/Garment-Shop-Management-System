@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { AttendanceRecord } from '../../types.ts';
+import { getBusinessDateParts, getWeekdayName } from '../../../shared/businessDate.ts';
 import { Calendar, CheckCircle2, Clock, Info, Shield } from 'lucide-react';
 
 export const EmployeeAttendance: React.FC = () => {
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
-  const [selectedMonth, setSelectedMonth] = useState<number>(new Date().getMonth() + 1);
-  const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
+  const [selectedMonth, setSelectedMonth] = useState<number>(() => getBusinessDateParts().month);
+  const [selectedYear, setSelectedYear] = useState<number>(() => getBusinessDateParts().year);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -110,7 +111,7 @@ export const EmployeeAttendance: React.FC = () => {
                       {r.date}
                     </td>
                     <td className="py-3 px-4 font-semibold text-slate-700">
-                      {r.day || new Date(r.date).toLocaleDateString('en-US', { weekday: 'long' })}
+                      {r.day || getWeekdayName(r.date, 'long')}
                     </td>
                     <td className="py-3 px-4 text-center">
                       <span className={`px-2.5 py-0.5 rounded-full font-bold text-[10px] uppercase tracking-wider ${

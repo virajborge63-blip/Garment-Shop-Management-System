@@ -1,7 +1,8 @@
 import express from 'express';
 import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
+import { getBusinessDate } from '../shared/businessDate.ts';
 
 const mongo = await MongoMemoryReplSet.create({
   replSet: { count: 1 },
@@ -155,6 +156,80 @@ describe('API characterization', () => {
       else process.env.SETUP_TOKEN = previousSetupToken;
       if (previousArgv1 === undefined) process.argv.splice(1, 1);
       else process.argv[1] = previousArgv1;
+    }
+  });
+
+  it('uses the business date for attendance dashboards and invoice numbers without shifting sale timestamps', async () => {
+    const instant = new Date('2026-10-31T20:00:00.000Z');
+    const businessDate = '2026-11-01';
+    const idempotencyKey = `f13-business-date-${suffix}`;
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(instant);
+
+    try {
+      await Attendance.create({
+        employee_id: employeeId,
+        date: businessDate,
+        status: 'Present',
+        working_hours: 8,
+        overtime_hours: 1,
+      });
+      await Payroll.create({
+        employee_id: employeeId,
+        month: 11,
+        year: 2026,
+        per_day_salary: 800,
+        basic_salary: 20800,
+        net_salary: 1234,
+      });
+
+      const adminDashboard = await request(app)
+        .get('/api/admin/dashboard')
+        .set('Authorization', `Bearer ${adminToken}`);
+      const ownerDashboard = await request(app)
+        .get('/api/super-admin/overview')
+        .set('Authorization', `Bearer ${ownerToken}`);
+      const employeeDashboard = await request(app)
+        .get('/api/employee/dashboard')
+        .set('Authorization', `Bearer ${employeeToken}`);
+      const roster = await request(app)
+        .get('/api/admin/attendance/roster')
+        .set('Authorization', `Bearer ${adminToken}`);
+      const saleResponse = await request(app)
+        .post('/api/shop/sales')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('Idempotency-Key', idempotencyKey)
+        .send({
+          items: [{ name: 'F13 Test Item', quantity: 1, unit_price: 1 }],
+          payment_method: 'Cash',
+        });
+
+      expect(adminDashboard.status).toBe(200);
+      expect(adminDashboard.body.cards.presentToday).toBe(1);
+      expect(adminDashboard.body.cards.currentMonthPayroll).toBe(1234);
+      expect(adminDashboard.body.charts.dailyAttendance.at(-1).date).toBe(businessDate);
+      expect(adminDashboard.body.charts.monthlyComparison.at(-1)).toMatchObject({
+        month: 'Nov 2026',
+        totalOt: 1,
+      });
+      expect(ownerDashboard.status).toBe(200);
+      expect(ownerDashboard.body.metrics.todayPresentCount).toBe(1);
+      expect(ownerDashboard.body.metrics.monthlyOvertimeExpense).toBe(150);
+      expect(employeeDashboard.status).toBe(200);
+      expect(employeeDashboard.body.stats.todayStatus).toBe('Present');
+      expect(employeeDashboard.body.stats.presentDays).toBe(1);
+      expect(roster.status).toBe(200);
+      expect(roster.body.date).toBe(businessDate);
+      expect(roster.body.roster.find((row: { employee_id: string }) => row.employee_id === employeeId).status).toBe('Present');
+      expect(saleResponse.status).toBe(201);
+      expect(saleResponse.body.sale.bill_number).toMatch(/^INV-20261101-/);
+      expect(new Date(saleResponse.body.sale.date).toISOString()).toBe(instant.toISOString());
+      expect(getBusinessDate(new Date(saleResponse.body.sale.date))).toBe(businessDate);
+    } finally {
+      vi.useRealTimers();
+      await Attendance.deleteOne({ employee_id: employeeId, date: businessDate });
+      await Payroll.deleteOne({ employee_id: employeeId, month: 11, year: 2026 });
+      await Sale.deleteOne({ idempotency_key: idempotencyKey });
     }
   });
 
