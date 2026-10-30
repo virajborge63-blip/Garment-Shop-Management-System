@@ -1,6 +1,6 @@
 # Audit Progress
 
-Updated: 2026-10-30
+Updated: 2026-10-31
 Branch: `audit-fixes`
 
 `Log-matched done` means the branch has a commit whose subject matches
@@ -15,7 +15,7 @@ pattern.
 | F-08 | Done - log-matched | `2669cd7` |
 | F-09 | Done - log-matched | `749cf91` |
 | F-02 | Done - log-matched | `b82f764` |
-| F-03 | Done - log-matched | `650aed4` |
+| F-03 | Fixed - Paid payroll remains immutable; no in-app reversal workflow; corrections handled outside the app | `650aed4` |
 | F-05 | Done - log-matched | `ddfc5bb` |
 | F-04 | Done - transactional/idempotent POS; invoice counters reconcile against existing sales; partial unique index migration added | `a299d88`, `4ca2126` |
 | F-10 | Fixed - employee and user uniqueness prechecks precede writes; employee/user/audit are transaction-bound; explicit existing-user-email/new-derived-username regression passes | `ed6fca8`, `e07c865` |
@@ -25,10 +25,10 @@ pattern.
 | Finding | Status | Commit |
 |---|---|---|
 | F-06 | Done - log-matched | `cee5249` |
-| F-07 | Done - log-matched; TRUST_PROXY follow-up | `fedf127`, `0675d30` |
+| F-07 | Fixed - in-memory limiter accepted for the current single-instance Render deployment; set `TRUST_PROXY=1`; reassess before scaling | `fedf127`, `0675d30` |
 | F-11 | Done - log-matched | `e94a679` |
-| F-17 | Done - log-matched | `fe8beb8` |
-| F-12 | Same-origin design approved; implementation deferred by scope; no code changed | - |
+| F-17 | Approved - owner will run the read-only inventory on a non-production copy and reset dormant accounts' passwords; legacy verification remains until then | `fe8beb8` |
+| F-12 | Deferred until after deployment is stable; no cookie, CSRF, CORS, CSP, or token-storage changes approved now | - |
 
 ## Phase 4 - Correctness and performance
 
@@ -48,8 +48,8 @@ pattern.
 | F-20 | Done - remember-me selects local/session storage; API consumers read both; logout and invalid-session cleanup clear both; tests/build passed | `21b7a24` |
 | F-22 | Done - replaced shell-specific cleanup with a Node script; `npm run clean` verified on Windows and build passed afterward | `2003b2f` |
 | F-23 | Done - documented startup retries, exact unauthenticated health payloads/statuses, and deployment health-check path | `151c602` |
-| F-19 | No safe fix - four low advisories remain; only offered remediation is a breaking major downgrade; dependency files unchanged | - |
-| F-21 | Proposal documented only; no refactor performed | - |
+| F-19 | Accepted for now; revisit when an upstream fix is available; dependency files unchanged | - |
+| F-21 | Deferred to a maintenance window; proposal documented only; no refactor performed | - |
 | F-24 | No code action; remind owner to rotate credentials if `.env` was shared | - |
 
 ## Remaining finding details and acceptance criteria
@@ -145,7 +145,8 @@ safety notes below.
   dependency files were changed; do not force the downgrade.
 - Fix/acceptance: Check for a compatible override or upstream update. Never use
   `--force` or a breaking forced downgrade. If no safe option exists, document
-  the evidence and leave dependencies unchanged. Commit any safe fix separately
+  the evidence and leave dependencies unchanged. Owner decision: accepted for
+  now and revisit when an upstream fix exists. Commit any safe fix separately
   with subject `fix(F-19): ...`.
 
 ### F-21 - Oversized source files
@@ -167,6 +168,7 @@ safety notes below.
      full-roster calculations/pagination and F-15's session-bound audit
      transactions; run the API characterization suite after route extraction
      and focused UI checks after each component extraction.
+  - Owner decision: defer this refactor to a maintenance window.
 
 ### F-24 - Local environment file may have been shared
 
@@ -191,6 +193,19 @@ F-18, F-08, F-09, F-02, F-03, F-05, and F-04.
 
 ## Phase 3 proposal notes
 
+- F-03: No reversal workflow is approved now. Paid payroll stays immutable;
+  corrections are handled outside the app for now.
+- F-07: Keep the in-memory rate limiter for the current single-instance Render
+  deployment. Set `TRUST_PROXY=1`; reassess the limiter before running multiple
+  instances.
 - F-12: Production UI/API are the same Render origin and have no external API clients. Approved direction is an HttpOnly, host-only session cookie (`Secure` in production, `SameSite=Lax`, seven-day expiry), session-bound CSRF token plus Origin validation, and CSP report-only before enforcement. Implementation remains deferred; do not change cookies, CORS, CSP, or token storage without a later explicit request.
-- F-17 migration: Use the aggregate read-only report against a reviewed non-production copy. Keep legacy verification while successful logins opportunistically upgrade hashes to scrypt; monitor the legacy count to zero, then arrange owner-controlled resets for remaining accounts that never log in. Do not bulk-convert hashes without plaintext passwords or remove legacy verification before the inventory is zero and the owner approves.
+- F-17 migration: Approved. The owner will run the aggregate read-only report
+  against a non-production copy and manually reset dormant accounts' passwords.
+  Keep legacy verification while successful logins opportunistically upgrade
+  hashes to scrypt; do not bulk-convert hashes or remove legacy verification
+  before the owner has reviewed the inventory and resets are complete.
+- F-19: Accepted for now; revisit when an upstream fix is available. Do not
+  force a breaking dependency downgrade.
+- F-21: Refactor deferred to a maintenance window; use the documented
+  behavior-preserving split proposal when work resumes.
 - Deployment: Code reads `TRUST_PROXY`; set `TRUST_PROXY=1` in the Render service environment for its single trusted proxy hop. This repository change does not alter `.env` or configure the hosted Render dashboard.
