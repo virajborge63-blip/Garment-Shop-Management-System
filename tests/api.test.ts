@@ -1257,7 +1257,7 @@ describe('API characterization', () => {
     expect(new Set(responses.map((response) => response.body.sale.bill_number)).size).toBe(2);
   });
 
-  it.skip('F-02: returns unmarked attendance when no record exists', async () => {
+  it('F-02: returns unmarked attendance when no record exists', async () => {
     const response = await request(app)
       .get('/api/admin/attendance/roster?date=2025-01-03')
       .set('Authorization', `Bearer ${adminToken}`);
@@ -1265,7 +1265,7 @@ describe('API characterization', () => {
     expect(response.body.roster[0].status).toBe('Unmarked');
   });
 
-  it.skip('F-03: never recalculates or finalizes a paid payroll record', async () => {
+  it('F-03: never recalculates or finalizes a paid payroll record', async () => {
     const payroll = await Payroll.findOne({ employee_id: employeeId, month: 2, year: 2025 });
     await request(app)
       .post('/api/admin/payroll/generate')
