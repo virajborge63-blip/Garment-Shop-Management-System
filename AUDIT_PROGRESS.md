@@ -28,7 +28,7 @@ pattern.
 | F-07 | Done - log-matched | `fedf127` |
 | F-11 | Done - log-matched | `e94a679` |
 | F-17 | Done - log-matched | `fe8beb8` |
-| F-12 | Pending owner decision; proposal only | - |
+| F-12 | Proposal ready; awaiting owner decision; no code changed | - |
 
 ## Phase 4 - Correctness and performance
 
