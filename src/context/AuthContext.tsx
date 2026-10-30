@@ -6,6 +6,7 @@ interface AuthContextType {
   token: string | null;
   isLoading: boolean;
   error: string | null;
+  warning: string | null;
   login: (identifier: string, pass: string) => Promise<boolean>;
   logout: () => Promise<void>;
   clearError: () => void;
@@ -18,6 +19,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [token, setToken] = useState<string | null>(() => localStorage.getItem('erp_token'));
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
 
   // Validate session on mount
   useEffect(() => {
@@ -58,6 +60,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const login = async (identifier: string, pass: string): Promise<boolean> => {
     setError(null);
+    setWarning(null);
     setIsLoading(true);
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 15000);
@@ -115,23 +118,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const logout = async () => {
+    let logoutWarning: string | null = null;
     if (token) {
       try {
-        await fetch('/api/auth/logout', {
+        const response = await fetch('/api/auth/logout', {
           method: 'POST',
           headers: { Authorization: `Bearer ${token}` },
         });
-      } catch (err) {
-        // silent catch
+        if (!response.ok) {
+          logoutWarning = 'Warning: The server could not confirm logout. This browser session was cleared, but the server session may remain active until it expires.';
+        }
+      } catch {
+        logoutWarning = 'Warning: Could not reach the server to confirm logout. This browser session was cleared, but the server session may remain active until it expires.';
       }
     }
     localStorage.removeItem('erp_token');
     setToken(null);
     setUser(null);
     setError(null);
+    setWarning(logoutWarning);
   };
 
-  const clearError = () => setError(null);
+  const clearError = () => {
+    setError(null);
+    setWarning(null);
+  };
 
   return (
     <AuthContext.Provider
@@ -140,6 +151,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         token,
         isLoading,
         error,
+        warning,
         login,
         logout,
         clearError,

@@ -5,6 +5,7 @@ import {
   Attendance,
   Setting,
   AuditLog,
+  Session,
   logAudit,
   hashPassword,
 } from '../db.ts';
@@ -264,7 +265,20 @@ router.put('/admins/:id', async (req: AuthRequest, res: Response) => {
       targetUser.password_hash = hashPassword(password);
     }
 
-    await targetUser.save();
+    const shouldRevokeSessions = status === 'inactive' || (password !== undefined && password !== '');
+    if (shouldRevokeSessions) {
+      const session = await User.startSession();
+      try {
+        await session.withTransaction(async () => {
+          await targetUser.save({ session });
+          await Session.deleteMany({ user_id: targetUser._id.toString() }, { session });
+        });
+      } finally {
+        await session.endSession();
+      }
+    } else {
+      await targetUser.save();
+    }
 
     await logAudit(
       req.user!.username,

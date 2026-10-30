@@ -18,12 +18,14 @@ const { Attendance, Employee, Payroll, Product, Sale, Session, Setting, User, ha
   await import('../server/db.ts');
 const { default: authRoutes } = await import('../server/routes/authRoutes.ts');
 const { default: adminRoutes } = await import('../server/routes/adminRoutes.ts');
+const { default: superAdminRoutes } = await import('../server/routes/superAdminRoutes.ts');
 const { default: employeeRoutes } = await import('../server/routes/employeeRoutes.ts');
 const { default: shopRoutes } = await import('../server/routes/shopRoutes.ts');
 
 const app = express();
 app.use(express.json());
 app.use('/api/auth', authRoutes);
+app.use('/api/super-admin', superAdminRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/employee', employeeRoutes);
 app.use('/api/shop', shopRoutes);
@@ -34,6 +36,11 @@ const adminCredentials = {
   email: `admin-${suffix}@example.test`,
   password: 'Test-password-123!',
 };
+const ownerCredentials = {
+  username: `owner-${suffix}`,
+  email: `owner-${suffix}@example.test`,
+  password: 'Owner-password-123!',
+};
 const employeeId = `TEST-${suffix}`.toUpperCase();
 const employeeCredentials = {
   username: `employee-${suffix}`,
@@ -41,6 +48,7 @@ const employeeCredentials = {
   password: 'Employee-password-123!',
 };
 let adminToken = '';
+let ownerToken = '';
 let employeeToken = '';
 
 async function login(username: string, password: string): Promise<string> {
@@ -84,6 +92,14 @@ describe('API characterization', () => {
       status: 'active',
     });
     await User.create({
+      username: ownerCredentials.username,
+      email: ownerCredentials.email,
+      password_hash: hashPassword(ownerCredentials.password),
+      role: 'SUPER_ADMIN',
+      employee_id: null,
+      status: 'active',
+    });
+    await User.create({
       username: employeeCredentials.username,
       email: employeeCredentials.email,
       password_hash: hashPassword(employeeCredentials.password),
@@ -93,6 +109,7 @@ describe('API characterization', () => {
     });
 
     adminToken = await login(adminCredentials.username, adminCredentials.password);
+    ownerToken = await login(ownerCredentials.username, ownerCredentials.password);
     employeeToken = await login(employeeCredentials.username, employeeCredentials.password);
   });
 
@@ -138,6 +155,123 @@ describe('API characterization', () => {
       else process.env.SETUP_TOKEN = previousSetupToken;
       if (previousArgv1 === undefined) process.argv.splice(1, 1);
       else process.argv[1] = previousArgv1;
+    }
+  });
+
+  it('revokes an employee session after an employee password reset', async () => {
+    const employeeId = `F11-EMP-${suffix}`.toUpperCase();
+    const username = `f11-employee-${suffix}`;
+    const password = 'Employee-old-password-123!';
+    await Employee.create({
+      employee_id: employeeId,
+      name: 'F11 Employee',
+      email: `${username}@example.test`,
+      phone: '',
+      address: '',
+      department: 'Testing',
+      designation: 'Test Role',
+      joining_date: '2025-01-01',
+      per_day_salary: 800,
+      monthly_salary: 20800,
+      overtime_rate: 150,
+      status: 'active',
+    });
+    await User.create({
+      username,
+      email: `${username}@example.test`,
+      password_hash: hashPassword(password),
+      role: 'EMPLOYEE',
+      employee_id: employeeId,
+      status: 'active',
+    });
+    const token = await login(username, password);
+
+    const response = await request(app)
+      .put(`/api/admin/employees/${employeeId}`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ password: 'Employee-new-password-123!' });
+
+    expect(response.status).toBe(200);
+    expect(await Session.exists({ token })).toBeNull();
+    expect((await request(app).get('/api/auth/me').set('Authorization', `Bearer ${token}`)).status).toBe(401);
+  });
+
+  it('revokes an administrator session after a password reset', async () => {
+    const username = `f11-password-admin-${suffix}`;
+    const target = await User.create({
+      username,
+      email: `${username}@example.test`,
+      password_hash: hashPassword('Admin-old-password-123!'),
+      role: 'ADMIN',
+      employee_id: null,
+      status: 'active',
+    });
+    const token = await login(username, 'Admin-old-password-123!');
+
+    const response = await request(app)
+      .put(`/api/super-admin/admins/${target._id}`)
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .send({ password: 'Admin-new-password-123!' });
+
+    expect(response.status).toBe(200);
+    expect(await Session.exists({ token })).toBeNull();
+    expect((await request(app).get('/api/auth/me').set('Authorization', `Bearer ${token}`)).status).toBe(401);
+  });
+
+  it('revokes an administrator session when the account is deactivated', async () => {
+    const username = `f11-deactivated-admin-${suffix}`;
+    const target = await User.create({
+      username,
+      email: `${username}@example.test`,
+      password_hash: hashPassword('Admin-status-password-123!'),
+      role: 'ADMIN',
+      employee_id: null,
+      status: 'active',
+    });
+    const token = await login(username, 'Admin-status-password-123!');
+
+    const response = await request(app)
+      .put(`/api/super-admin/admins/${target._id}`)
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .send({ status: 'inactive' });
+
+    expect(response.status).toBe(200);
+    expect(await Session.exists({ token })).toBeNull();
+    expect((await request(app).get('/api/auth/me').set('Authorization', `Bearer ${token}`)).status).toBe(401);
+  });
+
+  it('revokes sessions when setup-admin resets an existing account password', async () => {
+    const username = `f11-setup-admin-${suffix}`;
+    const email = `${username}@example.test`;
+    const target = await User.create({
+      username,
+      email,
+      password_hash: hashPassword('Setup-old-password-123!'),
+      role: 'SUPER_ADMIN',
+      employee_id: null,
+      status: 'active',
+    });
+    const token = await login(username, 'Setup-old-password-123!');
+    const previousSetupToken = process.env.SETUP_TOKEN;
+    process.env.SETUP_TOKEN = `test-setup-${suffix}`;
+
+    try {
+      const response = await request(app)
+        .post('/api/auth/setup-admin')
+        .send({
+          email,
+          password: 'Setup-new-password-123!',
+          username,
+          setupToken: process.env.SETUP_TOKEN,
+        });
+
+      expect(response.status).toBe(200);
+      expect(await Session.exists({ token })).toBeNull();
+      expect((await request(app).get('/api/auth/me').set('Authorization', `Bearer ${token}`)).status).toBe(401);
+    } finally {
+      if (previousSetupToken === undefined) delete process.env.SETUP_TOKEN;
+      else process.env.SETUP_TOKEN = previousSetupToken;
+      await User.deleteOne({ _id: target._id });
     }
   });
 

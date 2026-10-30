@@ -7,7 +7,7 @@ import {
 
 
 export const LoginPage: React.FC = () => {
-  const { login, error, clearError, isLoading } = useAuth();
+  const { login, error, warning, clearError, isLoading } = useAuth();
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -88,6 +88,12 @@ export const LoginPage: React.FC = () => {
             <div className="mb-5 p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 flex items-start gap-2.5 text-rose-400 text-xs animate-shake">
               <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
               <span className="leading-relaxed font-medium">{error}</span>
+            </div>
+          )}
+          {warning && (
+            <div role="status" className="mb-5 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-start gap-2.5 text-amber-300 text-xs">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span className="leading-relaxed font-medium">{warning}</span>
             </div>
           )}
 

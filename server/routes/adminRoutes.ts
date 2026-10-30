@@ -497,17 +497,25 @@ router.put('/employees/:id', async (req: AuthRequest, res: Response) => {
       userUpdate.password_hash = hashPassword(password);
     }
 
-    if (deactivatedAt) {
+    const shouldRevokeEmployeeSessions = deactivatedAt !== undefined || (password !== undefined && password !== '');
+    if (shouldRevokeEmployeeSessions) {
       const session = await Employee.startSession();
       try {
         await session.withTransaction(async () => {
           await oldEmp.save({ session });
-          const employeeUsers = await User.find({ employee_id: empId }).session(session);
-          for (const user of employeeUsers) {
-            user.set(userUpdate);
-            await user.save({ session });
+          if (deactivatedAt) {
+            const employeeUsers = await User.find({ employee_id: empId }).session(session);
+            for (const user of employeeUsers) {
+              user.set(userUpdate);
+              await user.save({ session });
+            }
+            await Session.deleteMany({ employee_id: empId }, { session });
+          } else {
+            if (Object.keys(userUpdate).length > 0) {
+              await User.updateMany({ employee_id: empId }, { $set: userUpdate }, { session });
+            }
+            await Session.deleteMany({ employee_id: empId }, { session });
           }
-          await Session.deleteMany({ employee_id: empId }, { session });
         });
       } finally {
         await session.endSession();

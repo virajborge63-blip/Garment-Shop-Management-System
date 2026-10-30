@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import mongoose from 'mongoose';
-import { User, initDatabase, hashPassword, logAudit } from '../server/db.ts';
+import { User, Session, initDatabase, hashPassword, logAudit } from '../server/db.ts';
 
 /**
  * CLI Administrator Setup & Credential Management Script (MongoDB)
@@ -76,12 +76,20 @@ async function runSetup() {
         process.exit(0);
       }
 
-      existing.username = cleanUsername;
-      existing.email = cleanEmail;
-      existing.password_hash = passwordHash;
-      existing.role = 'SUPER_ADMIN';
-      existing.status = 'active';
-      await existing.save();
+      const session = await User.startSession();
+      try {
+        await session.withTransaction(async () => {
+          existing.username = cleanUsername;
+          existing.email = cleanEmail;
+          existing.password_hash = passwordHash;
+          existing.role = 'SUPER_ADMIN';
+          existing.status = 'active';
+          await existing.save({ session });
+          await Session.deleteMany({ user_id: existing._id.toString() }, { session });
+        });
+      } finally {
+        await session.endSession();
+      }
 
       await logAudit(
         cleanUsername,

@@ -167,11 +167,19 @@ router.post('/setup-admin', authRateLimiter, async (req: Request, res: Response)
 
     const existingUser = await User.findOne({ email: trimmedEmail });
     if (existingUser) {
-      existingUser.username = adminUsername;
-      existingUser.password_hash = passwordHash;
-      existingUser.role = 'SUPER_ADMIN';
-      existingUser.status = 'active';
-      await existingUser.save();
+      const session = await User.startSession();
+      try {
+        await session.withTransaction(async () => {
+          existingUser.username = adminUsername;
+          existingUser.password_hash = passwordHash;
+          existingUser.role = 'SUPER_ADMIN';
+          existingUser.status = 'active';
+          await existingUser.save({ session });
+          await Session.deleteMany({ user_id: existingUser._id.toString() }, { session });
+        });
+      } finally {
+        await session.endSession();
+      }
 
       await logAudit(adminUsername, 'Setup API', 'SUPER_ADMIN_PASSWORD_RESET', 'users', '', `Authorized Super Admin password reset for ${trimmedEmail}`);
       return res.json({ success: true, message: 'Administrator credentials updated successfully.' });
