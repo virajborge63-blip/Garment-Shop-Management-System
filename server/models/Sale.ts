@@ -77,7 +77,14 @@ const SaleSchema = new Schema<ISale>(
   }
 );
 
-SaleSchema.index({ idempotency_key: 1 }, { unique: true, sparse: true });
+SaleSchema.index(
+  { idempotency_key: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { idempotency_key: { $type: 'string' } },
+    name: 'idempotency_key_string_unique',
+  }
+);
 
 export const Sale: Model<ISale> = mongoose.models.Sale
   ? (mongoose.models.Sale as Model<ISale>)

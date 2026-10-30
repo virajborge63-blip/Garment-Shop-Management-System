@@ -537,7 +537,7 @@ router.post('/sales', async (req: AuthRequest, res: Response) => {
     try {
       await InvoiceCounter.updateOne(
         { key: dateKey },
-        { $setOnInsert: { value: initialSequence } },
+        { $max: { value: initialSequence }, $setOnInsert: { key: dateKey } },
         { upsert: true }
       );
     } catch (error) {

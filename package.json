@@ -14,6 +14,7 @@
     "report:legacy-password-hashes": "tsx scripts/report_legacy_password_hashes.ts",
     "report:suspicious-salaries": "tsx scripts/report_suspicious_employee_salaries.ts",
     "report:suspicious-attendance": "tsx scripts/report_suspicious_attendance.ts",
+    "migrate:sale-idempotency-index": "tsx scripts/migrate_sale_idempotency_index.ts",
     "clean": "node scripts/clean.mjs",
     "lint": "tsc --noEmit",
     "test": "vitest run --testTimeout=30000 --hookTimeout=120000"

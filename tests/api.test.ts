@@ -21,7 +21,7 @@ process.env.SESSION_SECRET = 'test-session-secret-with-more-than-thirty-two-char
 const mongoose = (await import('mongoose')).default;
 await mongoose.connect(process.env.MONGODB_URI);
 
-const { Attendance, AuditLog, Category, Employee, Payroll, Product, Sale, Session, Setting, User, connectDB, hashPassword } =
+const { Attendance, AuditLog, Category, Employee, InvoiceCounter, Payroll, Product, Sale, Session, Setting, User, connectDB, hashPassword } =
   await import('../server/db.ts');
 const { default: authRoutes } = await import('../server/routes/authRoutes.ts');
 const { default: adminRoutes } = await import('../server/routes/adminRoutes.ts');
@@ -1087,6 +1087,26 @@ describe('API characterization', () => {
     expect((await Product.findById(product._id))?.stock_quantity).toBe(1);
   });
 
+  it('uses a string-only partial unique idempotency index while allowing legacy sales without keys', async () => {
+    await Sale.init();
+    const indexes = await Sale.collection.indexes();
+    const idempotencyIndex = indexes.find((index) => index.name === 'idempotency_key_string_unique');
+    expect(idempotencyIndex).toMatchObject({
+      unique: true,
+      partialFilterExpression: { idempotency_key: { $type: 'string' } },
+    });
+
+    const legacyBillNumbers = [`LEGACY-A-${suffix}`, `LEGACY-B-${suffix}`];
+    try {
+      await Sale.collection.insertMany(
+        legacyBillNumbers.map((bill_number) => ({ bill_number, total_amount: 0 }))
+      );
+      expect(await Sale.collection.countDocuments({ bill_number: { $in: legacyBillNumbers } })).toBe(2);
+    } finally {
+      await Sale.collection.deleteMany({ bill_number: { $in: legacyBillNumbers } });
+    }
+  });
+
   it('replays a sale safely for the same idempotency key', async () => {
     const product = await Product.create({
       name: 'Idempotency Test Garment',
@@ -1255,6 +1275,71 @@ describe('API characterization', () => {
 
     expect(responses.map((response) => response.status)).toEqual([201, 201]);
     expect(new Set(responses.map((response) => response.body.sale.bill_number)).size).toBe(2);
+  });
+
+  it('seeds invoice numbers above existing sales even when the daily counter is stale', async () => {
+    const dateKey = getBusinessDate(new Date());
+    const invoicePrefix = `INV-${dateKey.replace(/-/g, '')}-`;
+    const existingSales = await Sale.find({ bill_number: new RegExp(`^${invoicePrefix}`) })
+      .select({ bill_number: 1 })
+      .lean();
+    const currentMaximum = existingSales.reduce((max, existingSale) => {
+      const sequence = Number(existingSale.bill_number.slice(invoicePrefix.length));
+      return Number.isSafeInteger(sequence) ? Math.max(max, sequence) : max;
+    }, 0);
+    const historicalSequence = currentMaximum + 50;
+    const historicalBillNumber = `${invoicePrefix}${String(historicalSequence).padStart(4, '0')}`;
+    const idempotencyKey = `f04-counter-seed-${suffix}`;
+    const counterValue = Math.max(0, currentMaximum);
+
+    const product = await Product.create({
+      name: 'Counter Seed Test Garment',
+      sku: `COUNTER-${suffix}`,
+      category: 'Test',
+      size: 'M',
+      color: 'Blue',
+      fabric: 'Cotton',
+      cost_price: 40,
+      selling_price: 100,
+      stock_quantity: 1,
+      min_stock_alert: 1,
+      status: 'active',
+    });
+    await Sale.create({
+      bill_number: historicalBillNumber,
+      customer_name: 'Counter Seed Test',
+      items: [],
+      subtotal: 0,
+      discount: 0,
+      tax: 0,
+      total_amount: 0,
+      payment_method: 'Cash',
+      cashier_name: 'Test',
+      status: 'Completed',
+      date: new Date(),
+      idempotency_key: idempotencyKey,
+      idempotency_hash: 'a'.repeat(64),
+    });
+    await InvoiceCounter.updateOne(
+      { key: dateKey },
+      { $set: { value: counterValue } },
+      { upsert: true }
+    );
+
+    const response = await request(app)
+      .post('/api/shop/sales')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .set('Idempotency-Key', `f04-counter-next-${suffix}`)
+      .send({
+        items: [{ product_id: product._id.toString(), quantity: 1 }],
+        payment_method: 'Cash',
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body.sale.bill_number).toBe(
+      `${invoicePrefix}${String(historicalSequence + 1).padStart(4, '0')}`
+    );
+    await Product.deleteOne({ _id: product._id });
   });
 
   it('F-02: returns unmarked attendance when no record exists', async () => {
