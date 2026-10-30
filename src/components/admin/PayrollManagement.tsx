@@ -8,8 +8,15 @@ import {
   DollarSign, Sparkles, ChevronRight, TrendingUp
 } from 'lucide-react';
 
+interface PayrollWarning {
+  employee_id: string;
+  employee_name: string;
+  dates: string[];
+}
+
 export const PayrollManagement: React.FC = () => {
   const [payrolls, setPayrolls] = useState<PayrollRecord[]>([]);
+  const [payrollWarnings, setPayrollWarnings] = useState<PayrollWarning[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [selectedMonth, setSelectedMonth] = useState<number>(8); // Defaults to August or current
   const [selectedYear, setSelectedYear] = useState<number>(2026);
@@ -66,6 +73,7 @@ export const PayrollManagement: React.FC = () => {
     try {
       setIsGenerating(true);
       setFeedback(null);
+      setPayrollWarnings([]);
       const token = getStoredAuthToken();
       const res = await fetch('/api/admin/payroll/generate', {
         method: 'POST',
@@ -81,6 +89,7 @@ export const PayrollManagement: React.FC = () => {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to generate payroll');
 
+      setPayrollWarnings(Array.isArray(data.warnings) ? data.warnings : []);
       setFeedback({ type: 'success', message: data.message });
       fetchPayroll();
     } catch (err: any) {
@@ -206,6 +215,25 @@ export const PayrollManagement: React.FC = () => {
             <X className="w-4 h-4" />
           </button>
         </div>
+      )}
+
+      {payrollWarnings.length > 0 && (
+        <section
+          aria-label="Unmarked attendance warning"
+          className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-950"
+        >
+          <p className="text-sm font-bold">
+            Unmarked working days earn no pay. Review attendance if any of these were worked.
+          </p>
+          <ul className="mt-2 space-y-1 text-xs">
+            {payrollWarnings.map((warning) => (
+              <li key={warning.employee_id}>
+                <span className="font-semibold">{warning.employee_name} ({warning.employee_id}):</span>{' '}
+                {warning.dates.join(', ')}
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
 
       {/* Period Selector & Summary Cards */}

@@ -1206,16 +1206,26 @@ router.post('/payroll/generate', async (req: AuthRequest, res: Response) => {
     }
     const adminName = req.user!.name || req.user!.username || 'Admin';
     let processedCount = 0;
+    let warnings: Array<{ employee_id: string; employee_name: string; dates: string[] }> = [];
     const session = await Payroll.startSession();
     try {
       try {
         await session.withTransaction(async () => {
           processedCount = 0;
+          warnings = [];
           const stdSetting = await Setting.findOne({ key: 'standard_working_days' }).session(session);
           const standardWorkingDays = stdSetting ? parseFloat(stdSetting.value) : 26;
           const leavePaidSetting = await Setting.findOne({ key: 'leave_is_paid' }).session(session);
           const leaveIsPaid = leavePaidSetting?.value === 'true';
           const employees = await Employee.find(empQuery).session(session);
+          const activeEmployees = await Employee.find({
+            status: 'active',
+            is_active: { $ne: false },
+          })
+            .select({ employee_id: 1, name: 1, joining_date: 1 })
+            .session(session)
+            .lean();
+          const activeEmployeeIds = new Set(activeEmployees.map((employee) => employee.employee_id));
           const employeeIds = employees.map((employee) => employee.employee_id);
           const existingPayroll = await Payroll.find({
             employee_id: { $in: employeeIds },
@@ -1233,6 +1243,7 @@ router.post('/payroll/generate', async (req: AuthRequest, res: Response) => {
           const allAtt = await Attendance.find({
             date: new RegExp(`^${monthPrefix}`),
           }).session(session);
+          const markedEmployeesByDate = new Map<string, Set<string>>();
           const attMap: Record<string, { present: number; absent: number; leave: number; halfDay: number; ot: number }> = {};
           for (const r of allAtt) {
             if (!attMap[r.employee_id]) {
@@ -1243,7 +1254,29 @@ router.post('/payroll/generate', async (req: AuthRequest, res: Response) => {
             else if (r.status === 'Leave') attMap[r.employee_id].leave++;
             else if (r.status === 'Half Day') attMap[r.employee_id].halfDay++;
             attMap[r.employee_id].ot += r.overtime_hours || 0;
+
+            if (activeEmployeeIds.has(r.employee_id) && isValidAttendanceDate(r.date)) {
+              const markedEmployees = markedEmployeesByDate.get(r.date) || new Set<string>();
+              markedEmployees.add(r.employee_id);
+              markedEmployeesByDate.set(r.date, markedEmployees);
+            }
           }
+
+          warnings = activeEmployees
+            .map((employee) => ({
+              employee_id: employee.employee_id,
+              employee_name: employee.name,
+              dates: [...markedEmployeesByDate]
+                .filter(([date, markedEmployees]) =>
+                  date >= employee.joining_date &&
+                  !markedEmployees.has(employee.employee_id) &&
+                  [...markedEmployees].some((employeeId) => employeeId !== employee.employee_id)
+                )
+                .map(([date]) => date)
+                .sort(),
+            }))
+            .filter((warning) => warning.dates.length > 0)
+            .sort((left, right) => left.employee_id.localeCompare(right.employee_id));
 
           for (const emp of employees) {
             const payrollKey = { employee_id: emp.employee_id, month: qMonth, year: qYear };
@@ -1320,6 +1353,7 @@ router.post('/payroll/generate', async (req: AuthRequest, res: Response) => {
       success: true,
       message: `Payroll for ${processedCount} employees calculated successfully for ${qMonth}/${qYear}.`,
       processedCount,
+      warnings,
     });
   } catch (err: any) {
     console.error('Payroll generation error:', err);

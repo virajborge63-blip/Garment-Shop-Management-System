@@ -750,6 +750,154 @@ describe('API characterization', () => {
     expect(await Attendance.countDocuments({ employee_id: employeeId, date })).toBe(0);
   });
 
+  it('warns only for unmarked dates another active employee has attendance and does not change payroll amounts', async () => {
+    const warningEmployeeId = `F-WARN-${suffix}`.toUpperCase();
+    const peerEmployeeId = `F-WARN-PEER-${suffix}`.toUpperCase();
+    const archivedEmployeeId = `F-WARN-ARCHIVED-${suffix}`.toUpperCase();
+    const payrollMonth = 4;
+    const payrollYear = 2035;
+    const ownAttendanceDate = '2035-04-02';
+    const otherMarkedDate = '2035-04-03';
+    const preJoiningDate = '2035-04-01';
+    const noOneMarkedDate = '2035-04-06';
+
+    await Employee.create([
+      {
+        employee_id: warningEmployeeId,
+        name: 'Warning Target',
+        email: `warning-target-${suffix}@example.test`,
+        joining_date: '2035-04-02',
+        per_day_salary: 800,
+        monthly_salary: 20800,
+        overtime_rate: 150,
+        department: 'Testing',
+        designation: 'Test Role',
+        status: 'active',
+      },
+      {
+        employee_id: peerEmployeeId,
+        name: 'Warning Peer',
+        email: `warning-peer-${suffix}@example.test`,
+        joining_date: '2035-04-01',
+        per_day_salary: 800,
+        monthly_salary: 20800,
+        overtime_rate: 150,
+        department: 'Testing',
+        designation: 'Test Role',
+        status: 'active',
+      },
+      {
+        employee_id: archivedEmployeeId,
+        name: 'Archived Warning Source',
+        email: `warning-archived-${suffix}@example.test`,
+        joining_date: '2035-04-01',
+        per_day_salary: 800,
+        monthly_salary: 20800,
+        overtime_rate: 150,
+        department: 'Testing',
+        designation: 'Test Role',
+        status: 'inactive',
+        is_active: false,
+      },
+    ]);
+    await Attendance.create({
+      employee_id: warningEmployeeId,
+      date: ownAttendanceDate,
+      status: 'Present',
+      working_hours: 8,
+      overtime_hours: 0,
+    });
+
+    try {
+      const firstGeneration = await request(app)
+        .post('/api/admin/payroll/generate')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ month: payrollMonth, year: payrollYear, employee_id: warningEmployeeId });
+
+      expect(firstGeneration.status).toBe(200);
+      expect(firstGeneration.body.warnings).not.toContainEqual(
+        expect.objectContaining({ employee_id: warningEmployeeId })
+      );
+      const baselinePayroll = await Payroll.findOne({
+        employee_id: warningEmployeeId,
+        month: payrollMonth,
+        year: payrollYear,
+      }).lean();
+      expect(baselinePayroll).toMatchObject({
+        present_days: 1,
+        absent_days: 0,
+        basic_salary: 800,
+        net_salary: 800,
+      });
+
+      await Payroll.updateOne(
+        { employee_id: warningEmployeeId, month: payrollMonth, year: payrollYear },
+        { $set: { status: 'Draft' } }
+      );
+      await Attendance.create([
+        {
+          employee_id: peerEmployeeId,
+          date: otherMarkedDate,
+          status: 'Present',
+          working_hours: 8,
+          overtime_hours: 0,
+        },
+        {
+          employee_id: peerEmployeeId,
+          date: preJoiningDate,
+          status: 'Present',
+          working_hours: 8,
+          overtime_hours: 0,
+        },
+        {
+          employee_id: archivedEmployeeId,
+          date: '2035-04-04',
+          status: 'Present',
+          working_hours: 8,
+          overtime_hours: 0,
+        },
+      ]);
+
+      const regenerated = await request(app)
+        .post('/api/admin/payroll/generate')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ month: payrollMonth, year: payrollYear, employee_id: warningEmployeeId });
+
+      expect(regenerated.status).toBe(200);
+      const targetWarning = regenerated.body.warnings.find(
+        (warning: { employee_id: string }) => warning.employee_id === warningEmployeeId
+      );
+      expect(targetWarning).toEqual({
+        employee_id: warningEmployeeId,
+        employee_name: 'Warning Target',
+        dates: [otherMarkedDate],
+      });
+      const regeneratedPayroll = await Payroll.findOne({
+        employee_id: warningEmployeeId,
+        month: payrollMonth,
+        year: payrollYear,
+      }).lean();
+      expect(regeneratedPayroll).toMatchObject({
+        present_days: baselinePayroll?.present_days,
+        absent_days: baselinePayroll?.absent_days,
+        leave_days: baselinePayroll?.leave_days,
+        half_days: baselinePayroll?.half_days,
+        overtime_hours: baselinePayroll?.overtime_hours,
+        basic_salary: baselinePayroll?.basic_salary,
+        extra_day_salary: baselinePayroll?.extra_day_salary,
+        overtime_salary: baselinePayroll?.overtime_salary,
+        net_salary: baselinePayroll?.net_salary,
+      });
+      expect(targetWarning.dates).not.toContain(noOneMarkedDate);
+    } finally {
+      await Promise.all([
+        Employee.deleteMany({ employee_id: { $in: [warningEmployeeId, peerEmployeeId, archivedEmployeeId] } }),
+        Attendance.deleteMany({ employee_id: { $in: [warningEmployeeId, peerEmployeeId, archivedEmployeeId] } }),
+        Payroll.deleteMany({ employee_id: warningEmployeeId, month: payrollMonth, year: payrollYear }),
+      ]);
+    }
+  });
+
   it('rejects invalid attendance dates, employees, statuses, and hour ranges', async () => {
     const invalidPayloads = [
       { employee_id: employeeId, date: '2025-02-30', status: 'Present' },
