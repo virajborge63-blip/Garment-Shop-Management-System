@@ -981,10 +981,12 @@ describe('API characterization', () => {
     }
   });
 
-  it('rejects employee creation when the login email is already in use', async () => {
+  it('rejects an existing user email with a new derived username without creating an employee', async () => {
     const email = `f10-email-${suffix}@example.test`;
+    const derivedUsername = email.split('@')[0];
+    const existingUsername = `existing-${suffix}`;
     await User.create({
-      username: `existing-${suffix}`,
+      username: existingUsername,
       email,
       password_hash: hashPassword('Test-password-123!'),
       role: 'EMPLOYEE',
@@ -1006,6 +1008,8 @@ describe('API characterization', () => {
 
     expect(response.status).toBe(409);
     expect(await Employee.exists({ email })).toBeNull();
+    expect(await User.exists({ email, username: existingUsername })).toBeTruthy();
+    expect(await User.exists({ username: derivedUsername })).toBeNull();
   });
 
   it('rejects employee creation when the derived username is already in use', async () => {
