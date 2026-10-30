@@ -11,15 +11,18 @@ function isValidDate(value: string): boolean {
 }
 
 async function reportSuspiciousAttendance() {
-  const uri = process.env.MONGODB_URI;
-  if (!uri) {
-    console.error('Set MONGODB_URI to a read-only, non-production database copy before running this report.');
+  const uri = process.env.AUDIT_MONGODB_URI;
+  if (!uri || process.env.AUDIT_NON_PRODUCTION !== 'true') {
+    console.error(
+      'Set AUDIT_MONGODB_URI to a read-only, non-production database copy and AUDIT_NON_PRODUCTION=true.'
+    );
     process.exitCode = 1;
     return;
   }
 
   try {
-    await mongoose.connect(uri, { serverSelectionTimeoutMS: 10000 });
+    mongoose.set('autoIndex', false);
+    await mongoose.connect(uri, { autoIndex: false, serverSelectionTimeoutMS: 10000 });
     const employeeIds = new Set(await Employee.distinct('employee_id'));
     let findings = 0;
     const records = Attendance.find()

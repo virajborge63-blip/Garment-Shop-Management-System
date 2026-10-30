@@ -16,7 +16,8 @@ async function reportLegacyPasswordHashes(): Promise<void> {
   }
 
   try {
-    await mongoose.connect(uri, { serverSelectionTimeoutMS: 10000 });
+    mongoose.set('autoIndex', false);
+    await mongoose.connect(uri, { autoIndex: false, serverSelectionTimeoutMS: 10000 });
     const inventory = createPasswordHashInventory();
     const users = User.find()
       .select({ _id: 0, password_hash: 1, status: 1 })

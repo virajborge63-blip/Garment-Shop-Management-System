@@ -100,7 +100,19 @@ The server does not trust forwarded client IP headers by default. `TRUST_PROXY` 
 
 For a Node.js host, use `npm run build` as the build command and `npm start` as the start command, with the environment variables above configured in the host's secret settings. Provision the first owner using the setup CLI against the same persistent database before giving client users access. Configure the hosting platform's health check to use `GET /api/health`; it returns HTTP 200 only when the database is connected and HTTP 503 while degraded. No hosting-provider-specific deployment manifest is present in this repository, so provider-specific networking and health-check configuration must be completed in that provider's dashboard.
 
-To inventory legacy password hashes, set `AUDIT_MONGODB_URI` to a read-only, non-production database copy and `AUDIT_NON_PRODUCTION=true`, then run `npm run report:legacy-password-hashes`. The report emits aggregate counts only; it does not print identifiers or hashes and does not modify data. Do not run it against production.
+The read-only audit reports never load `.env` or fall back to `MONGODB_URI`. Set `AUDIT_MONGODB_URI` to a read-only, non-production database copy and `AUDIT_NON_PRODUCTION=true` before running any report. In Windows PowerShell, use:
+
+```powershell
+$env:AUDIT_MONGODB_URI = '<read-only non-production database URI>'
+$env:AUDIT_NON_PRODUCTION = 'true'
+npm run report:audit-suspicious-attendance
+npm run report:audit-suspicious-salaries
+npm run report:legacy-password-hashes
+Remove-Item Env:\AUDIT_MONGODB_URI
+Remove-Item Env:\AUDIT_NON_PRODUCTION
+```
+
+The older `report:suspicious-*` aliases remain available. All reports disable Mongoose automatic index creation and only read data; the password inventory emits aggregate counts only, without identifiers or hashes. Never run these against production.
 
 ---
 
@@ -125,17 +137,18 @@ To inventory legacy password hashes, set `AUDIT_MONGODB_URI` to a read-only, non
 
 ### Sale idempotency index migration
 
-Before deploying the string-only partial unique index on an existing database, stop the application so no POS requests are running. The migration checks for duplicate string idempotency keys before changing indexes and aborts without dropping an index if duplicates exist. Run it once against the target database:
+The migration requires `MONGODB_URI` and does not load `.env`. By default it runs in dry-run mode: it prints the current Sale collection index definitions and the count of duplicate string idempotency keys, and makes no changes. To apply, stop the application so no POS requests are running, review the dry-run output, then explicitly set `CONFIRM_SALE_IDEMPOTENCY_INDEX_MIGRATION=true`. The migration checks for duplicate keys and aborts without dropping an index if any exist.
 
 ```powershell
 $env:MONGODB_URI = '<target database URI>'
+npm run migrate:sale-idempotency-index
 $env:CONFIRM_SALE_IDEMPOTENCY_INDEX_MIGRATION = 'true'
 npm run migrate:sale-idempotency-index
 Remove-Item Env:\MONGODB_URI
 Remove-Item Env:\CONFIRM_SALE_IDEMPOTENCY_INDEX_MIGRATION
 ```
 
-The migration prints no URI or credentials. Existing sale documents without a string `idempotency_key` are excluded from the new index. Deploy/restart the application only after the migration succeeds. Do not run this against a live database while the application is processing sales.
+The first invocation is read-only. The second explicitly applies changes. The migration prints no URI or credentials. Existing sale documents without a string `idempotency_key` are excluded from the new index. Deploy/restart the application only after the migration succeeds. Do not run it while the app is processing sales.
 
 ### Post-deploy smoke checklist
 

@@ -7,14 +7,21 @@ const partialIndexOptions = {
   name: 'idempotency_key_string_unique',
 };
 
+interface IndexDefinition {
+  key: Record<string, unknown>;
+  name?: string;
+  unique?: boolean;
+  sparse?: boolean;
+  partialFilterExpression?: Record<string, unknown>;
+}
+
 async function migrateSaleIdempotencyIndex(): Promise<void> {
   const uri = process.env.MONGODB_URI;
-  if (!uri || process.env.CONFIRM_SALE_IDEMPOTENCY_INDEX_MIGRATION !== 'true') {
-    throw new Error(
-      'Set MONGODB_URI and CONFIRM_SALE_IDEMPOTENCY_INDEX_MIGRATION=true to run this index migration.'
-    );
+  if (!uri) {
+    throw new Error('Set MONGODB_URI to the target database URI.');
   }
 
+  const applyChanges = process.env.CONFIRM_SALE_IDEMPOTENCY_INDEX_MIGRATION === 'true';
   mongoose.set('autoIndex', false);
   await mongoose.connect(uri, { autoIndex: false, serverSelectionTimeoutMS: 10000 });
 
@@ -29,27 +36,38 @@ async function migrateSaleIdempotencyIndex(): Promise<void> {
       .listCollections({ name: collectionName }, { nameOnly: true })
       .hasNext();
 
-    if (!collectionExists) {
-      await Sale.collection.createIndex({ idempotency_key: 1 }, partialIndexOptions);
-      console.log('Created the partial unique Sale idempotency index.');
+    const indexes: IndexDefinition[] = collectionExists
+      ? await Sale.collection.indexes()
+      : [];
+    const duplicateCounts = collectionExists
+      ? await Sale.collection
+        .aggregate([
+          { $match: { idempotency_key: { $type: 'string' } } },
+          { $group: { _id: '$idempotency_key', count: { $sum: 1 } } },
+          { $match: { count: { $gt: 1 } } },
+          { $count: 'duplicateKeyCount' },
+        ])
+        .toArray()
+      : [];
+    const duplicateKeyCount = duplicateCounts[0]?.duplicateKeyCount ?? 0;
+
+    console.log(`Sale collection: ${collectionName}${collectionExists ? '' : ' (not created)'}`);
+    console.log('Existing indexes:');
+    console.log(JSON.stringify(indexes, null, 2));
+    console.log(`Duplicate string idempotency keys: ${duplicateKeyCount}`);
+
+    if (!applyChanges) {
+      console.log(
+        'Dry run only; no changes made. Set CONFIRM_SALE_IDEMPOTENCY_INDEX_MIGRATION=true to apply the migration.'
+      );
       return;
     }
 
-    const duplicates = await Sale.collection
-      .aggregate([
-        { $match: { idempotency_key: { $type: 'string' } } },
-        { $group: { _id: '$idempotency_key', count: { $sum: 1 } } },
-        { $match: { count: { $gt: 1 } } },
-        { $limit: 1 },
-        { $project: { _id: 0, count: 1 } },
-      ])
-      .toArray();
-    if (duplicates.length > 0) {
+    if (duplicateKeyCount > 0) {
       throw new Error('Duplicate string idempotency keys exist; no index changes were made.');
     }
 
-    const existingIndexes = await Sale.collection.indexes();
-    const idempotencyIndexes = existingIndexes.filter(
+    const idempotencyIndexes = indexes.filter(
       (index) =>
         index.key.idempotency_key === 1 &&
         Object.keys(index.key).length === 1 &&
@@ -64,6 +82,12 @@ async function migrateSaleIdempotencyIndex(): Promise<void> {
 
     if (existingPartialIndex) {
       console.log('The partial unique Sale idempotency index is already in place.');
+      return;
+    }
+
+    if (!collectionExists) {
+      await Sale.collection.createIndex({ idempotency_key: 1 }, partialIndexOptions);
+      console.log('Created the partial unique Sale idempotency index.');
       return;
     }
 

@@ -2,15 +2,18 @@ import mongoose from 'mongoose';
 import { Employee } from '../server/models/Employee.ts';
 
 async function reportSuspiciousEmployeeSalaries() {
-  const uri = process.env.MONGODB_URI;
-  if (!uri) {
-    console.error('Set MONGODB_URI to a read-only, non-production database copy before running this report.');
+  const uri = process.env.AUDIT_MONGODB_URI;
+  if (!uri || process.env.AUDIT_NON_PRODUCTION !== 'true') {
+    console.error(
+      'Set AUDIT_MONGODB_URI to a read-only, non-production database copy and AUDIT_NON_PRODUCTION=true.'
+    );
     process.exitCode = 1;
     return;
   }
 
   try {
-    await mongoose.connect(uri, { serverSelectionTimeoutMS: 10000 });
+    mongoose.set('autoIndex', false);
+    await mongoose.connect(uri, { autoIndex: false, serverSelectionTimeoutMS: 10000 });
     const employees = await Employee.find({
       $or: [{ per_day_salary: { $lte: 0 } }, { per_day_salary: 800 }],
     })
