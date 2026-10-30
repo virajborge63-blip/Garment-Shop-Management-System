@@ -12,13 +12,54 @@ import superAdminRoutes from './server/routes/superAdminRoutes.ts';
 import employeeRoutes from './server/routes/employeeRoutes.ts';
 import shopRoutes from './server/routes/shopRoutes.ts';
 
+let databaseReady = false;
+
+function isDatabaseAvailable(): boolean {
+  return databaseReady && mongoose.connection.readyState === 1;
+}
+
+function getSafeDatabaseError(error: unknown): string {
+  if (!(error instanceof Error)) {
+    return 'Unknown database initialization error';
+  }
+
+  if (
+    error.message === 'MONGODB_URI must be configured in production; in-memory storage is not persistent.' ||
+    error.message === 'SESSION_SECRET must be configured with at least 32 characters in production.' ||
+    error.message.startsWith('MongoDB connection failed.')
+  ) {
+    return error.message;
+  }
+
+  return error.name || 'DatabaseInitializationError';
+}
+
+async function initializeDatabaseWithRetry(): Promise<void> {
+  let retryDelayMs = 5000;
+
+  while (!databaseReady) {
+    try {
+      await initDatabase();
+      databaseReady = true;
+      console.log('[Database] Initialization complete.');
+    } catch (error) {
+      console.error(
+        `[Database] Initialization failed (${getSafeDatabaseError(error)}). Retrying in ${Math.round(retryDelayMs / 1000)} seconds.`
+      );
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+      retryDelayMs = Math.min(retryDelayMs * 2, 60000);
+    }
+  }
+}
+
 async function startServer() {
   const app = express();
   const httpServer = http.createServer(app);
   const PORT = Number(process.env.PORT) || 3000;
-
-  // Initialize MongoDB connection and safe idempotent database setup
-  await initDatabase();
+  const isProduction =
+    process.env.NODE_ENV === 'production' ||
+    process.argv[1]?.endsWith('server.cjs') ||
+    process.env.npm_lifecycle_event === 'start';
 
   // Basic security & parsing
   app.disable('x-powered-by');
@@ -63,11 +104,12 @@ async function startServer() {
   // Health-check endpoint
   app.get('/api/health', (req, res) => {
     try {
-      const isDbConnected = mongoose.connection.readyState === 1;
+      const isDbConnected = isDatabaseAvailable();
+      const isDbConnecting = mongoose.connection.readyState === 2;
       return res.status(isDbConnected ? 200 : 503).json({
         status: isDbConnected ? 'ok' : 'error',
         uptime: Math.round(process.uptime()),
-        database: isDbConnected ? 'connected' : 'disconnected',
+        database: isDbConnected ? 'connected' : isDbConnecting ? 'connecting' : 'disconnected',
         engine: 'MongoDB',
         timestamp: new Date().toISOString()
       });
@@ -76,18 +118,22 @@ async function startServer() {
     }
   });
 
+  app.use('/api', (req, res, next) => {
+    if (!isDatabaseAvailable()) {
+      return res.status(503).json({
+        error: 'The service database is unavailable. Please try again shortly.',
+        code: 'DATABASE_UNAVAILABLE',
+      });
+    }
+    next();
+  });
+
   // Mount API Routes
   app.use('/api/auth', authRoutes);
   app.use('/api/super-admin', superAdminRoutes);
   app.use('/api/admin', adminRoutes);
   app.use('/api/employee', employeeRoutes);
   app.use('/api/shop', shopRoutes);
-
-  // Production vs Development mode detection
-  const isProduction =
-    process.env.NODE_ENV === 'production' ||
-    process.argv[1]?.endsWith('server.cjs') ||
-    process.env.npm_lifecycle_event === 'start';
 
   if (!isProduction) {
     const isHmrDisabled = process.env.DISABLE_HMR === 'true';
@@ -135,6 +181,8 @@ async function startServer() {
   httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`[Server] Garment Shop Management System (MongoDB) listening at http://0.0.0.0:${PORT} (${isProduction ? 'production' : 'development'})`);
   });
+
+  void initializeDatabaseWithRetry();
 }
 
 startServer().catch((err) => {
