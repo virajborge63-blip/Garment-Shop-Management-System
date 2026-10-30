@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { EmployeeDashboardMetrics } from '../../types.ts';
+import { getStoredAuthToken } from '../../utils/authToken.ts';
 import { 
   CheckCircle2, Clock, Calendar, DollarSign, 
   Percent, UserCheck, AlertCircle, ArrowRight, 
@@ -21,7 +22,7 @@ export const EmployeeDashboard: React.FC<EmployeeDashboardProps> = ({ onNavigate
   const fetchDashboard = async () => {
     try {
       setIsLoading(true);
-      const token = localStorage.getItem('erp_token');
+      const token = getStoredAuthToken();
       const res = await fetch('/api/employee/dashboard', {
         headers: { Authorization: `Bearer ${token}` }
       });

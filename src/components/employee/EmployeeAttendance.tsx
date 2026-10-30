@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { AttendanceRecord } from '../../types.ts';
 import { getBusinessDateParts, getWeekdayName } from '../../../shared/businessDate.ts';
+import { getStoredAuthToken } from '../../utils/authToken.ts';
 import { Calendar, CheckCircle2, Clock, Info, Shield } from 'lucide-react';
 
 export const EmployeeAttendance: React.FC = () => {
@@ -16,7 +17,7 @@ export const EmployeeAttendance: React.FC = () => {
   const fetchAttendance = async () => {
     try {
       setIsLoading(true);
-      const token = localStorage.getItem('erp_token');
+      const token = getStoredAuthToken();
       const res = await fetch(`/api/employee/attendance?month=${selectedMonth}&year=${selectedYear}`, {
         headers: { Authorization: `Bearer ${token}` }
       });

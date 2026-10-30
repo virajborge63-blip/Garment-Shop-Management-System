@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { User } from '../types.ts';
+import { clearStoredAuthToken, getStoredAuthToken, storeAuthToken } from '../utils/authToken.ts';
 
 interface AuthContextType {
   user: User | null;
@@ -7,7 +8,7 @@ interface AuthContextType {
   isLoading: boolean;
   error: string | null;
   warning: string | null;
-  login: (identifier: string, pass: string) => Promise<boolean>;
+  login: (identifier: string, pass: string, rememberMe: boolean) => Promise<boolean>;
   logout: () => Promise<void>;
   clearError: () => void;
 }
@@ -16,7 +17,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
-  const [token, setToken] = useState<string | null>(() => localStorage.getItem('erp_token'));
+  const [token, setToken] = useState<string | null>(() => getStoredAuthToken());
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
@@ -24,7 +25,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Validate session on mount
   useEffect(() => {
     const verifySession = async () => {
-      const storedToken = localStorage.getItem('erp_token');
+      const storedToken = getStoredAuthToken();
       if (!storedToken) {
         setIsLoading(false);
         return;
@@ -42,7 +43,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setUser(data.user);
           setToken(storedToken);
         } else if (res.status === 401 || res.status === 403) {
-          localStorage.removeItem('erp_token');
+          clearStoredAuthToken();
           setToken(null);
           setUser(null);
         } else {
@@ -58,7 +59,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     verifySession();
   }, []);
 
-  const login = async (identifier: string, pass: string): Promise<boolean> => {
+  const login = async (identifier: string, pass: string, rememberMe: boolean): Promise<boolean> => {
     setError(null);
     setWarning(null);
     setIsLoading(true);
@@ -100,7 +101,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return false;
       }
 
-      localStorage.setItem('erp_token', data.token);
+      storeAuthToken(data.token, rememberMe);
       setToken(data.token);
       setUser(data.user);
       return true;
@@ -132,7 +133,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         logoutWarning = 'Warning: Could not reach the server to confirm logout. This browser session was cleared, but the server session may remain active until it expires.';
       }
     }
-    localStorage.removeItem('erp_token');
+    clearStoredAuthToken();
     setToken(null);
     setUser(null);
     setError(null);

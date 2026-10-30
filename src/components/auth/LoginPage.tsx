@@ -16,7 +16,7 @@ export const LoginPage: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!identifier || !password) return;
-    await login(identifier, password);
+    await login(identifier, password, rememberMe);
   };
 
   return (

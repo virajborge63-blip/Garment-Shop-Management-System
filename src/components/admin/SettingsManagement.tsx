@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { getStoredAuthToken } from '../../utils/authToken.ts';
 import { 
   Settings as SettingsIcon, Building2, Clock, Calendar, 
   DollarSign, CheckCircle2, AlertCircle, Save, Shield
@@ -27,7 +28,7 @@ export const SettingsManagement: React.FC = () => {
   const fetchSettings = async () => {
     try {
       setIsLoading(true);
-      const token = localStorage.getItem('erp_token');
+      const token = getStoredAuthToken();
       const res = await fetch('/api/admin/settings', {
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -48,7 +49,7 @@ export const SettingsManagement: React.FC = () => {
     setFeedback(null);
 
     try {
-      const token = localStorage.getItem('erp_token');
+      const token = getStoredAuthToken();
       const res = await fetch('/api/admin/settings', {
         method: 'POST',
         headers: {

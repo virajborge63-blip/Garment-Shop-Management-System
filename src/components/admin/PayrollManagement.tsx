@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { PayrollRecord, SalarySlipData } from '../../types.ts';
+import { getStoredAuthToken } from '../../utils/authToken.ts';
 import { SalarySlipModal } from '../common/SalarySlipModal.tsx';
 import { 
   FileSpreadsheet, Calculator, CheckCircle2, 
@@ -34,7 +35,7 @@ export const PayrollManagement: React.FC = () => {
 
   const fetchCompanySettings = async () => {
     try {
-      const token = localStorage.getItem('erp_token');
+      const token = getStoredAuthToken();
       const res = await fetch('/api/admin/settings', {
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -48,7 +49,7 @@ export const PayrollManagement: React.FC = () => {
   const fetchPayroll = async () => {
     try {
       setIsLoading(true);
-      const token = localStorage.getItem('erp_token');
+      const token = getStoredAuthToken();
       const res = await fetch(`/api/admin/payroll?month=${selectedMonth}&year=${selectedYear}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -65,7 +66,7 @@ export const PayrollManagement: React.FC = () => {
     try {
       setIsGenerating(true);
       setFeedback(null);
-      const token = localStorage.getItem('erp_token');
+      const token = getStoredAuthToken();
       const res = await fetch('/api/admin/payroll/generate', {
         method: 'POST',
         headers: {
@@ -92,7 +93,7 @@ export const PayrollManagement: React.FC = () => {
   const handleFinalizeAll = async () => {
     if (!window.confirm(`Finalize and lock all payroll records for ${selectedMonth}/${selectedYear}?`)) return;
     try {
-      const token = localStorage.getItem('erp_token');
+      const token = getStoredAuthToken();
       const res = await fetch('/api/admin/payroll/finalize-all', {
         method: 'POST',
         headers: {
@@ -127,7 +128,7 @@ export const PayrollManagement: React.FC = () => {
     if (!editingPayroll) return;
 
     try {
-      const token = localStorage.getItem('erp_token');
+      const token = getStoredAuthToken();
       const res = await fetch(`/api/admin/payroll/${editingPayroll.payroll_id}`, {
         method: 'PUT',
         headers: {

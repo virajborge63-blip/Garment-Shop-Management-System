@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { AttendanceRecord, Employee, AttendanceStatus, RosterEmployeeRow } from '../../types.ts';
 import { addCalendarDays, getBusinessDate, getBusinessDateParts } from '../../../shared/businessDate.ts';
+import { getStoredAuthToken } from '../../utils/authToken.ts';
 import {
   ATTENDANCE_PAGE_SIZE_DEFAULT,
   ATTENDANCE_PAGE_SIZE_MAX,
@@ -103,7 +104,7 @@ export const AttendanceManagement: React.FC = () => {
 
   const fetchEmployees = async () => {
     try {
-      const token = localStorage.getItem('erp_token');
+      const token = getStoredAuthToken();
       const firstParams = new URLSearchParams({
         page: '1',
         limit: String(EMPLOYEE_PAGE_SIZE_MAX),
@@ -142,7 +143,7 @@ export const AttendanceManagement: React.FC = () => {
   const fetchRoster = async (date: string) => {
     try {
       setIsRosterLoading(true);
-      const token = localStorage.getItem('erp_token');
+      const token = getStoredAuthToken();
       const res = await fetch(`/api/admin/attendance/roster?date=${date}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -169,7 +170,7 @@ export const AttendanceManagement: React.FC = () => {
   const fetchAttendanceRecords = async () => {
     try {
       setIsRecordsLoading(true);
-      const token = localStorage.getItem('erp_token');
+      const token = getStoredAuthToken();
       const params = new URLSearchParams();
 
       if (filterMode === 'date' && selectedDate) {
@@ -335,7 +336,7 @@ export const AttendanceManagement: React.FC = () => {
   const handleSaveAllRoster = async () => {
     try {
       setIsSavingBatch(true);
-      const token = localStorage.getItem('erp_token');
+      const token = getStoredAuthToken();
       
       // Get all rows that are either dirty or currently marked
       const rowsToSave = roster.filter((row) => row.status !== 'Unmarked');
@@ -394,7 +395,7 @@ export const AttendanceManagement: React.FC = () => {
     }
 
     try {
-      const token = localStorage.getItem('erp_token');
+      const token = getStoredAuthToken();
       const res = await fetch('/api/admin/attendance', {
         method: 'POST',
         headers: {
@@ -494,7 +495,7 @@ export const AttendanceManagement: React.FC = () => {
   const handleSingleFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const token = localStorage.getItem('erp_token');
+      const token = getStoredAuthToken();
       const res = await fetch('/api/admin/attendance', {
         method: 'POST',
         headers: {
@@ -519,7 +520,7 @@ export const AttendanceManagement: React.FC = () => {
   const handleDeleteRecord = async (attendanceId: number | string) => {
     if (!window.confirm('Delete this attendance record?')) return;
     try {
-      const token = localStorage.getItem('erp_token');
+      const token = getStoredAuthToken();
       const res = await fetch(`/api/admin/attendance/${attendanceId}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` },

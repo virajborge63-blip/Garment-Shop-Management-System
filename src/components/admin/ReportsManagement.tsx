@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { getStoredAuthToken } from '../../utils/authToken.ts';
 import { Printer, Download, Filter, BarChart3, Clock, DollarSign, Calendar } from 'lucide-react';
 
 export const ReportsManagement: React.FC = () => {
@@ -17,7 +18,7 @@ export const ReportsManagement: React.FC = () => {
   const fetchReport = async () => {
     try {
       setIsLoading(true);
-      const token = localStorage.getItem('erp_token');
+      const token = getStoredAuthToken();
       const params = new URLSearchParams({
         type: reportType,
         month: String(selectedMonth),

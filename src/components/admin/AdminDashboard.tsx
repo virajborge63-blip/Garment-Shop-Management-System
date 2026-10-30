@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { AdminDashboardMetrics } from '../../types.ts';
+import { getStoredAuthToken } from '../../utils/authToken.ts';
 import { 
   Users, UserCheck, UserX, Calendar, Clock, DollarSign, 
   TrendingUp, AlertCircle, ArrowUpRight, BarChart3, 
@@ -22,7 +23,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate }) =>
   const fetchMetrics = async () => {
     try {
       setIsLoading(true);
-      const token = localStorage.getItem('erp_token');
+      const token = getStoredAuthToken();
       const res = await fetch('/api/admin/dashboard', {
         headers: { Authorization: `Bearer ${token}` }
       });

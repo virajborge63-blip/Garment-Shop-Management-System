@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { getStoredAuthToken } from '../../utils/authToken.ts';
 import {
   ShoppingBag,
   Package,
@@ -130,7 +131,7 @@ export const InventoryBillingManagement: React.FC = () => {
     gst_number: '',
   });
 
-  const token = localStorage.getItem('erp_token');
+  const token = getStoredAuthToken();
 
   const authHeaders = {
     'Content-Type': 'application/json',

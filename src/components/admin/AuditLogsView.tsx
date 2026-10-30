@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { AuditLogItem } from '../../types.ts';
+import { getStoredAuthToken } from '../../utils/authToken.ts';
 import { ShieldAlert, Search, RefreshCw, Clock, History } from 'lucide-react';
 
 export const AuditLogsView: React.FC = () => {
@@ -14,7 +15,7 @@ export const AuditLogsView: React.FC = () => {
   const fetchLogs = async () => {
     try {
       setIsLoading(true);
-      const token = localStorage.getItem('erp_token');
+      const token = getStoredAuthToken();
       const res = await fetch('/api/admin/audit-logs', {
         headers: { Authorization: `Bearer ${token}` }
       });

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Employee } from '../../types.ts';
+import { getStoredAuthToken } from '../../utils/authToken.ts';
 import { getBusinessDate } from '../../../shared/businessDate.ts';
 import { EMPLOYEE_PAGE_SIZE_DEFAULT } from '../../../shared/pagination.ts';
 import { 
@@ -51,7 +52,7 @@ export const EmployeeManagement: React.FC = () => {
   const fetchEmployees = async () => {
     try {
       setIsLoading(true);
-      const token = localStorage.getItem('erp_token');
+      const token = getStoredAuthToken();
       const params = new URLSearchParams();
       if (searchTerm) params.append('search', searchTerm);
       if (deptFilter !== 'All') params.append('department', deptFilter);
@@ -101,7 +102,7 @@ export const EmployeeManagement: React.FC = () => {
   const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const token = localStorage.getItem('erp_token');
+      const token = getStoredAuthToken();
       const res = await fetch('/api/admin/employees', {
         method: 'POST',
         headers: {
@@ -127,7 +128,7 @@ export const EmployeeManagement: React.FC = () => {
     if (!selectedEmp) return;
 
     try {
-      const token = localStorage.getItem('erp_token');
+      const token = getStoredAuthToken();
       const res = await fetch(`/api/admin/employees/${selectedEmp.employee_id}`, {
         method: 'PUT',
         headers: {
@@ -150,7 +151,7 @@ export const EmployeeManagement: React.FC = () => {
   const handleDeleteConfirm = async () => {
     if (!selectedEmp) return;
     try {
-      const token = localStorage.getItem('erp_token');
+      const token = getStoredAuthToken();
       const res = await fetch(`/api/admin/employees/${selectedEmp.employee_id}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` }

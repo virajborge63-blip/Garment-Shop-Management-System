@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Employee } from '../../types.ts';
+import { getStoredAuthToken } from '../../utils/authToken.ts';
 import { Shield, Building2, Phone, Mail, MapPin, Calendar, DollarSign, Clock, UserCheck } from 'lucide-react';
 
 export const EmployeeProfile: React.FC = () => {
@@ -13,7 +14,7 @@ export const EmployeeProfile: React.FC = () => {
   const fetchProfile = async () => {
     try {
       setIsLoading(true);
-      const token = localStorage.getItem('erp_token');
+      const token = getStoredAuthToken();
       const res = await fetch('/api/employee/profile', {
         headers: { Authorization: `Bearer ${token}` }
       });

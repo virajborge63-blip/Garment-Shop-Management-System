@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { SuperAdminDashboardData } from '../../types.ts';
+import { getStoredAuthToken } from '../../utils/authToken.ts';
 import { 
   Building2, Users, DollarSign, Clock, ShieldCheck, 
   TrendingUp, Award, AlertCircle, ArrowUpRight, 
@@ -22,7 +23,7 @@ export const SuperAdminOverview: React.FC<SuperAdminOverviewProps> = ({ onNaviga
   const fetchOverview = async () => {
     try {
       setIsLoading(true);
-      const token = localStorage.getItem('erp_token');
+      const token = getStoredAuthToken();
       const res = await fetch('/api/super-admin/overview', {
         headers: { Authorization: `Bearer ${token}` },
       });

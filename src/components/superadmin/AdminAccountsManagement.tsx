@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { AdminAccount } from '../../types.ts';
+import { getStoredAuthToken } from '../../utils/authToken.ts';
 import { 
   ShieldCheck, UserPlus, Lock, Mail, User, 
   Trash2, AlertCircle, CheckCircle2, X, RefreshCw, KeyRound
@@ -31,7 +32,7 @@ export const AdminAccountsManagement: React.FC = () => {
   const fetchAdmins = async () => {
     try {
       setIsLoading(true);
-      const token = localStorage.getItem('erp_token');
+      const token = getStoredAuthToken();
       const res = await fetch('/api/super-admin/admins', {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -51,7 +52,7 @@ export const AdminAccountsManagement: React.FC = () => {
 
     try {
       setIsSubmitting(true);
-      const token = localStorage.getItem('erp_token');
+      const token = getStoredAuthToken();
       const res = await fetch('/api/super-admin/admins', {
         method: 'POST',
         headers: {
@@ -78,7 +79,7 @@ export const AdminAccountsManagement: React.FC = () => {
   const handleToggleStatus = async (admin: AdminAccount) => {
     const nextStatus = admin.status === 'active' ? 'inactive' : 'active';
     try {
-      const token = localStorage.getItem('erp_token');
+      const token = getStoredAuthToken();
       const res = await fetch(`/api/super-admin/admins/${admin.id}`, {
         method: 'PUT',
         headers: {
@@ -102,7 +103,7 @@ export const AdminAccountsManagement: React.FC = () => {
     if (!resetModalUser || !newPassword) return;
 
     try {
-      const token = localStorage.getItem('erp_token');
+      const token = getStoredAuthToken();
       const res = await fetch(`/api/super-admin/admins/${resetModalUser.id}`, {
         method: 'PUT',
         headers: {
@@ -126,7 +127,7 @@ export const AdminAccountsManagement: React.FC = () => {
     if (!window.confirm(`Permanently delete account @${admin.username}?`)) return;
 
     try {
-      const token = localStorage.getItem('erp_token');
+      const token = getStoredAuthToken();
       const res = await fetch(`/api/super-admin/admins/${admin.id}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` },

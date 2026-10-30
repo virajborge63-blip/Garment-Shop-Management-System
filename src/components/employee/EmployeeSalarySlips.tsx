@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { PayrollRecord } from '../../types.ts';
+import { getStoredAuthToken } from '../../utils/authToken.ts';
 import { SalarySlipModal } from '../common/SalarySlipModal.tsx';
 import { FileText, Printer, CheckCircle2, Building2 } from 'lucide-react';
 
@@ -17,7 +18,7 @@ export const EmployeeSalarySlips: React.FC = () => {
   const fetchSlips = async () => {
     try {
       setIsLoading(true);
-      const token = localStorage.getItem('erp_token');
+      const token = getStoredAuthToken();
       const res = await fetch('/api/employee/salary-slips', {
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -32,7 +33,7 @@ export const EmployeeSalarySlips: React.FC = () => {
 
   const handleOpenSlip = async (payrollId: number | string) => {
     try {
-      const token = localStorage.getItem('erp_token');
+      const token = getStoredAuthToken();
       const res = await fetch(`/api/employee/salary-slips/${payrollId}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
