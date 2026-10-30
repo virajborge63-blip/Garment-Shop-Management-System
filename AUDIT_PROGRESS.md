@@ -49,7 +49,7 @@ pattern.
 | F-22 | Done - replaced shell-specific cleanup with a Node script; `npm run clean` verified on Windows and build passed afterward | `2003b2f` |
 | F-23 | Done - documented startup retries, exact unauthenticated health payloads/statuses, and deployment health-check path | `151c602` |
 | F-19 | No safe fix - four low advisories remain; only offered remediation is a breaking major downgrade; dependency files unchanged | - |
-| F-21 | Pending; proposal only | - |
+| F-21 | Proposal documented only; no refactor performed | - |
 | F-24 | No code action; remind owner to rotate credentials if `.env` was shared | - |
 
 ## Remaining finding details and acceptance criteria
@@ -153,6 +153,20 @@ safety notes below.
 - Severity/area/location: Low; E; `adminRoutes.ts` (~1,255 lines) and
   `AttendanceManagement.tsx` (~1,468 lines) in the original audit.
 - Fix/acceptance: Proposal/split plan only in this run. Do not refactor.
+- Proposal (no code changed):
+  1. Keep the current `/api/admin` URL surface and extract route modules for
+     employees, attendance, payroll, and dashboard/report/settings/audit
+     endpoints. Apply `authenticateToken` and `requireAdmin` consistently to
+     every extracted router. Keep attendance aliases and response shapes.
+  2. Keep `AttendanceManagement` as the tab-level coordinator; extract the
+     roster (including bulk/inline saves), records/history (filters,
+     pagination, edit/delete), calendar, and single-record modal into focused
+     components. Move fetch/state coordination into a small attendance hook
+     only where the state is shared between tabs.
+  3. Refactor in separate, behavior-preserving changes. Preserve F-14's
+     full-roster calculations/pagination and F-15's session-bound audit
+     transactions; run the API characterization suite after route extraction
+     and focused UI checks after each component extraction.
 
 ### F-24 - Local environment file may have been shared
 
