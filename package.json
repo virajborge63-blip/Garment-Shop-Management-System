@@ -11,6 +11,7 @@
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",
     "setup:admin": "tsx scripts/setup_admin.ts",
+    "report:legacy-password-hashes": "tsx scripts/report_legacy_password_hashes.ts",
     "report:suspicious-salaries": "tsx scripts/report_suspicious_employee_salaries.ts",
     "report:suspicious-attendance": "tsx scripts/report_suspicious_attendance.ts",
     "clean": "rm -rf dist server.js",

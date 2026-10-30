@@ -96,6 +96,8 @@ The server does not trust forwarded client IP headers by default. If deployed be
 
 For a Node.js host, use `npm run build` as the build command and `npm start` as the start command, with the environment variables above configured in the host's secret settings. Provision the first owner using the setup CLI against the same persistent database before giving client users access. No hosting-provider-specific deployment manifest is present in this repository, so provider-specific networking and health-check setup must be completed in that provider's dashboard.
 
+To inventory legacy password hashes, set `AUDIT_MONGODB_URI` to a read-only, non-production database copy and `AUDIT_NON_PRODUCTION=true`, then run `npm run report:legacy-password-hashes`. The report emits aggregate counts only; it does not print identifiers or hashes and does not modify data. Do not run it against production.
+
 ---
 
 ## 🧪 Testing & Verification
