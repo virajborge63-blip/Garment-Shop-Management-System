@@ -17,7 +17,7 @@ pattern.
 | F-02 | Done - log-matched | `b82f764` |
 | F-03 | Done - log-matched | `650aed4` |
 | F-05 | Done - log-matched | `ddfc5bb` |
-| F-04 | Done - log-matched | `a299d88` |
+| F-04 | Done - transactional/idempotent POS; invoice counters reconcile against existing sales; partial unique index migration added | `a299d88`, `4ca2126` |
 | F-10 | Verified already implemented; skipped. Current tests pass; commit subject lacks the `F-10` marker. | `ed6fca8` |
 
 ## Phase 3 - Security

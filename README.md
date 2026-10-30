@@ -122,3 +122,32 @@ To inventory legacy password hashes, set `AUDIT_MONGODB_URI` to a read-only, non
   HTTP 503
   {"status":"degraded","database":"disconnected"}
   ```
+
+### Sale idempotency index migration
+
+Before deploying the string-only partial unique index on an existing database, stop the application so no POS requests are running. The migration checks for duplicate string idempotency keys before changing indexes and aborts without dropping an index if duplicates exist. Run it once against the target database:
+
+```powershell
+$env:MONGODB_URI = '<target database URI>'
+$env:CONFIRM_SALE_IDEMPOTENCY_INDEX_MIGRATION = 'true'
+npm run migrate:sale-idempotency-index
+Remove-Item Env:\MONGODB_URI
+Remove-Item Env:\CONFIRM_SALE_IDEMPOTENCY_INDEX_MIGRATION
+```
+
+The migration prints no URI or credentials. Existing sale documents without a string `idempotency_key` are excluded from the new index. Deploy/restart the application only after the migration succeeds. Do not run this against a live database while the application is processing sales.
+
+### Post-deploy smoke checklist
+
+Run write operations in staging or with dedicated test records, not against real payroll or sales data.
+
+- [ ] `GET /api/health` without authentication returns HTTP 200 and exactly `{"status":"ok","database":"connected"}`. When the database is unavailable in staging, it returns HTTP 503 and exactly `{"status":"degraded","database":"disconnected"}`.
+- [ ] Log in with a test account; confirm the correct role portal loads. Change that test user's password and verify their other sessions are rejected; log out and confirm the current browser session is cleared.
+- [ ] In production configuration, call `/api/auth/setup-admin` without `SETUP_TOKEN`; confirm it is rejected and creates or changes no account.
+- [ ] Spoof `X-Forwarded-For` from an untrusted client and confirm it does not bypass login/API rate limiting.
+- [ ] For a date with no attendance records, confirm active employees appear as **Unmarked**. Submit attendance with 17 working hours and with an invalid status; each request must return HTTP 400 and make no partial changes.
+- [ ] Create an employee with zero daily salary; confirm HTTP 400 and no employee/account is created. Also try duplicate username and duplicate email; each request must fail and leave no orphan employee or user record.
+- [ ] If the active roster exceeds 50 employees, confirm all are represented in the attendance roster and payroll calculations (the UI may paginate display rows).
+- [ ] Make a valid POS sale with a test product and confirm expected stock and sale. Submit an out-of-stock cart and confirm it fails without a partial stock decrement or sale. Double-submit the same checkout with the same idempotency key and payload; confirm exactly one sale is stored and stock is decremented once.
+- [ ] Seed a test employee's period with a **Paid** payroll record, run payroll generation and **finalize-all**, and confirm the paid record's status and amounts remain unchanged.
+- [ ] Create a test employee with attendance/payroll history, archive the employee, confirm login/session access is revoked, and verify historical records remain available.
