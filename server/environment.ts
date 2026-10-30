@@ -5,19 +5,19 @@ export function isProduction(): boolean {
 }
 
 export function getTrustProxyHops(): number {
-  const configuredHops = process.env.TRUST_PROXY_HOPS;
+  const configuredHops = process.env.TRUST_PROXY;
   if (configuredHops === undefined) {
     return 0;
   }
 
   const normalizedHops = configuredHops.trim();
   if (!/^\d+$/.test(normalizedHops)) {
-    throw new Error('TRUST_PROXY_HOPS must be a non-negative integer.');
+    throw new Error('TRUST_PROXY must be a non-negative integer.');
   }
 
   const hops = Number(normalizedHops);
   if (!Number.isSafeInteger(hops)) {
-    throw new Error('TRUST_PROXY_HOPS must be a non-negative integer.');
+    throw new Error('TRUST_PROXY must be a non-negative integer.');
   }
   return hops;
 }
