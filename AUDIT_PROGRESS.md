@@ -24,7 +24,7 @@ pattern.
 
 | Finding | Status | Commit |
 |---|---|---|
-| F-06 | Pending | - |
+| F-06 | Done - log-matched | `cee5249` |
 | F-07 | Pending | - |
 | F-11 | Pending | - |
 | F-17 | Pending | - |
