@@ -25,10 +25,10 @@ pattern.
 | Finding | Status | Commit |
 |---|---|---|
 | F-06 | Done - log-matched | `cee5249` |
-| F-07 | Done - log-matched | `fedf127` |
+| F-07 | Done - log-matched; TRUST_PROXY follow-up | `fedf127`, `0675d30` |
 | F-11 | Done - log-matched | `e94a679` |
 | F-17 | Done - log-matched | `fe8beb8` |
-| F-12 | Proposal ready; awaiting owner decision; no code changed | - |
+| F-12 | Same-origin design approved; implementation deferred by scope; no code changed | - |
 
 ## Phase 4 - Correctness and performance
 
@@ -64,3 +64,9 @@ F-18, F-08, F-09, F-02, F-03, F-05, and F-04.
 - Keep each finding's fix in its own `fix(F-xx): ...` commit and update this file after each commit.
 - Stop at each phase boundary and wait for the user's `continue`.
 - Payroll reversal remains a proposal only; do not implement without approval.
+
+## Phase 3 proposal notes
+
+- F-12: Production UI/API are the same Render origin and have no external API clients. Approved direction is an HttpOnly, host-only session cookie (`Secure` in production, `SameSite=Lax`, seven-day expiry), session-bound CSRF token plus Origin validation, and CSP report-only before enforcement. Implementation remains deferred; do not change cookies, CORS, CSP, or token storage without a later explicit request.
+- F-17 migration: Use the aggregate read-only report against a reviewed non-production copy. Keep legacy verification while successful logins opportunistically upgrade hashes to scrypt; monitor the legacy count to zero, then arrange owner-controlled resets for remaining accounts that never log in. Do not bulk-convert hashes without plaintext passwords or remove legacy verification before the inventory is zero and the owner approves.
+- Deployment: Code reads `TRUST_PROXY`; set `TRUST_PROXY=1` in the Render service environment for its single trusted proxy hop. This repository change does not alter `.env` or configure the hosted Render dashboard.
