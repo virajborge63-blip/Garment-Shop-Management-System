@@ -38,7 +38,7 @@ pattern.
 | F-14 | Done - paginated employee/attendance lists, preserved complete roster and calculations; added attendance date/employee index | `3a6e2db` |
 | F-15 | Done - strict session-bound audits for payroll/account changes; best-effort failures emit `AUDIT_WRITE_FAILED` | `6f10b88` |
 | F-16 | Done - removed fake reset UI/API, documented manual owner reset; focused tests, type-check, and build passed | `b209ed6` |
-| F-01 | Pending | - |
+| F-01 | Done - exact connected/degraded health payloads, URI-redacted connection logs; tests/build passed; owner must correct production database access | `a4698fb` |
 
 ## Phase 5 - Low severity
 
