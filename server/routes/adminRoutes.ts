@@ -28,6 +28,15 @@ function parsePositiveSalary(value: unknown): number | undefined {
   return Number.isFinite(salary) && salary > 0 ? salary : undefined;
 }
 
+function isDuplicateKeyError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    error.code === 11000
+  );
+}
+
 // ==========================================
 // 1. ADMIN DASHBOARD
 // ==========================================
@@ -934,6 +943,17 @@ router.post('/payroll/generate', async (req: AuthRequest, res: Response) => {
     }
     const employees = await Employee.find(empQuery);
 
+    const employeeIds = employees.map((employee) => employee.employee_id);
+    const lockedPayroll = await Payroll.exists({
+      employee_id: { $in: employeeIds },
+      month: qMonth,
+      year: qYear,
+      status: { $in: ['Finalized', 'Paid'] },
+    });
+    if (lockedPayroll) {
+      return res.status(409).json({ error: 'Finalized or paid payroll cannot be recalculated.' });
+    }
+
     const monthPrefix = `${qYear}-${String(qMonth).padStart(2, '0')}`;
     const allAtt = await Attendance.find({ date: new RegExp(`^${monthPrefix}`) });
 
@@ -953,6 +973,12 @@ router.post('/payroll/generate', async (req: AuthRequest, res: Response) => {
     let processedCount = 0;
 
     for (const emp of employees) {
+      const payrollKey = { employee_id: emp.employee_id, month: qMonth, year: qYear };
+      const existing = await Payroll.findOne(payrollKey).select({ status: 1 }).lean();
+      if (existing && existing.status !== 'Draft') {
+        return res.status(409).json({ error: 'Payroll changed while being generated. Refresh and retry.' });
+      }
+
       const stats = attMap[emp.employee_id] || { present: 0, absent: 0, leave: 0, halfDay: 0, ot: 0 };
       const paidLeaveDays = leaveIsPaid ? stats.leave : 0;
       const actualPaidDays = stats.present + (stats.halfDay * 0.5) + paidLeaveDays;
@@ -967,31 +993,44 @@ router.post('/payroll/generate', async (req: AuthRequest, res: Response) => {
       const deductions = 0;
       const netSalary = basicSalary + extraDaySalary + overtimeSalary + bonus - deductions;
 
-      await Payroll.findOneAndUpdate(
-        { employee_id: emp.employee_id, month: qMonth, year: qYear },
-        {
-          $set: {
-            working_days: standardWorkingDays,
-            present_days: stats.present,
-            absent_days: stats.absent,
-            leave_days: stats.leave,
-            half_days: stats.halfDay,
-            overtime_hours: stats.ot,
-            extra_working_days: extraWorkingDays,
-            per_day_salary: emp.per_day_salary,
-            basic_salary: basicSalary,
-            extra_day_salary: extraDaySalary,
-            overtime_salary: overtimeSalary,
-            bonus,
-            deductions,
-            net_salary: netSalary,
-            status: 'Finalized',
-            generated_by: adminName,
-            created_at: new Date(),
-          },
-        },
-        { upsert: true, new: true }
-      );
+      const payrollValues = {
+        working_days: standardWorkingDays,
+        present_days: stats.present,
+        absent_days: stats.absent,
+        leave_days: stats.leave,
+        half_days: stats.halfDay,
+        overtime_hours: stats.ot,
+        extra_working_days: extraWorkingDays,
+        per_day_salary: emp.per_day_salary,
+        basic_salary: basicSalary,
+        extra_day_salary: extraDaySalary,
+        overtime_salary: overtimeSalary,
+        bonus,
+        deductions,
+        net_salary: netSalary,
+        status: 'Finalized' as const,
+        generated_by: adminName,
+      };
+
+      if (existing) {
+        const updated = await Payroll.findOneAndUpdate(
+          { ...payrollKey, status: 'Draft' },
+          { $set: payrollValues },
+          { returnDocument: 'after', runValidators: true }
+        );
+        if (!updated) {
+          return res.status(409).json({ error: 'Payroll changed while being generated. Refresh and retry.' });
+        }
+      } else {
+        try {
+          await Payroll.create({ ...payrollKey, ...payrollValues });
+        } catch (error) {
+          if (!isDuplicateKeyError(error) || !(await Payroll.exists(payrollKey))) {
+            throw error;
+          }
+          return res.status(409).json({ error: 'Payroll changed while being generated. Refresh and retry.' });
+        }
+      }
       processedCount++;
     }
 
@@ -1023,14 +1062,29 @@ router.put('/payroll/status', async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ error: 'Payroll ID and status are required.' });
     }
 
-    const updated = await Payroll.findByIdAndUpdate(
-      payroll_id,
-      { $set: { status } },
-      { new: true }
-    );
+    if (!['Draft', 'Finalized', 'Paid'].includes(status)) {
+      return res.status(400).json({ error: 'Payroll status is invalid.' });
+    }
 
-    if (!updated) {
+    const payroll = await Payroll.findById(payroll_id);
+    if (!payroll) {
       return res.status(404).json({ error: 'Payroll record not found.' });
+    }
+
+    const allowedTransition =
+      (payroll.status === 'Draft' && status === 'Finalized') ||
+      (payroll.status === 'Finalized' && status === 'Paid');
+    if (!allowedTransition) {
+      return res.status(409).json({ error: 'Payroll status cannot be changed from its current state.' });
+    }
+
+    const updated = await Payroll.findOneAndUpdate(
+      { _id: payroll_id, status: payroll.status },
+      { $set: { status } },
+      { returnDocument: 'after', runValidators: true }
+    );
+    if (!updated) {
+      return res.status(409).json({ error: 'Payroll status changed. Refresh and retry.' });
     }
 
     await logAudit(
@@ -1057,7 +1111,7 @@ router.post('/payroll/finalize-all', async (req: AuthRequest, res: Response) => 
     const qYear = year ? parseInt(String(year), 10) : now.getFullYear();
 
     const result = await Payroll.updateMany(
-      { month: qMonth, year: qYear },
+      { month: qMonth, year: qYear, status: 'Draft' },
       { $set: { status: 'Finalized' } }
     );
 
@@ -1091,35 +1145,53 @@ router.put('/payroll/:id', async (req: AuthRequest, res: Response) => {
     if (!record) {
       return res.status(404).json({ error: 'Payroll record not found.' });
     }
+    if (record.status !== 'Draft') {
+      return res.status(409).json({ error: 'Finalized or paid payroll cannot be edited.' });
+    }
 
     const newBonus = bonus !== undefined ? Math.max(0, parseFloat(bonus) || 0) : record.bonus;
     const newDeductions = deductions !== undefined ? Math.max(0, parseFloat(deductions) || 0) : record.deductions;
-    if (status && ['Draft', 'Finalized', 'Paid'].includes(status)) {
-      record.status = status as 'Draft' | 'Finalized' | 'Paid';
+    const newStatus = status === undefined ? record.status : status;
+    if (!['Draft', 'Finalized', 'Paid'].includes(newStatus)) {
+      return res.status(400).json({ error: 'Payroll status is invalid.' });
     }
-
-    record.bonus = newBonus;
-    record.deductions = newDeductions;
-    record.net_salary = Math.max(
+    if (newStatus === 'Paid') {
+      return res.status(409).json({ error: 'Payroll must be finalized before it can be marked paid.' });
+    }
+    const newNetSalary = Math.max(
       0,
       record.basic_salary + record.extra_day_salary + record.overtime_salary + newBonus - newDeductions
     );
 
-    await record.save();
+    const updated = await Payroll.findOneAndUpdate(
+      { _id: id, status: 'Draft' },
+      {
+        $set: {
+          bonus: newBonus,
+          deductions: newDeductions,
+          net_salary: newNetSalary,
+          status: newStatus,
+        },
+      },
+      { returnDocument: 'after', runValidators: true }
+    );
+    if (!updated) {
+      return res.status(409).json({ error: 'Payroll status changed. Refresh and retry.' });
+    }
 
     await logAudit(
       req.user!.username,
       req.user!.name || 'Admin',
       'PAYROLL_EDITED',
-      `Payroll #${id} (${record.employee_id})`,
-      `Net: ₹${record.net_salary}`,
-      `Bonus: ₹${newBonus}, Deductions: ₹${newDeductions}, Net: ₹${record.net_salary}, Status: ${record.status}`
+      `Payroll #${id} (${updated.employee_id})`,
+      `Bonus: ₹${record.bonus}, Deductions: ₹${record.deductions}, Net: ₹${record.net_salary}, Status: ${record.status}`,
+      `Bonus: ₹${newBonus}, Deductions: ₹${newDeductions}, Net: ₹${newNetSalary}, Status: ${updated.status}`
     );
 
     return res.json({
       success: true,
-      message: `Payroll for ${record.employee_id} updated successfully.`,
-      payroll: record,
+      message: `Payroll for ${updated.employee_id} updated successfully.`,
+      payroll: updated,
     });
   } catch (err: any) {
     console.error('Update payroll error:', err);

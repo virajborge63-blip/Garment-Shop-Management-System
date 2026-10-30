@@ -304,6 +304,12 @@ describe('API characterization', () => {
     expect(payroll?.status).toBe('Finalized');
     expect(payroll?.net_salary).toBeGreaterThan(0);
 
+    const finalizedEdit = await request(app)
+      .put(`/api/admin/payroll/${payroll?._id.toString()}`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ bonus: 100 });
+    expect(finalizedEdit.status).toBe(409);
+
     const paid = await request(app)
       .put('/api/admin/payroll/status')
       .set('Authorization', `Bearer ${adminToken}`)
@@ -311,6 +317,96 @@ describe('API characterization', () => {
 
     expect(paid.status).toBe(200);
     expect((await Payroll.findById(payroll?._id))?.status).toBe('Paid');
+
+    const regenerated = await request(app)
+      .post('/api/admin/payroll/generate')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ month: 2, year: 2025, employee_id: employeeId });
+    expect(regenerated.status).toBe(409);
+
+    const paidEdit = await request(app)
+      .put(`/api/admin/payroll/${payroll?._id.toString()}`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ deductions: 100 });
+    expect(paidEdit.status).toBe(409);
+
+    const rollbackPaid = await request(app)
+      .put('/api/admin/payroll/status')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ payroll_id: payroll?._id.toString(), status: 'Draft' });
+    expect(rollbackPaid.status).toBe(409);
+    expect((await Payroll.findById(payroll?._id))?.status).toBe('Paid');
+  });
+
+  it('finalizes only drafts and rejects edits and recalculation for locked payroll', async () => {
+    const statuses = ['Draft', 'Finalized', 'Paid'] as const;
+    const employees = await Employee.create(
+      statuses.map((_, index) => ({
+        employee_id: `F03-${index}-${suffix}`,
+        name: `F03 Employee ${index}`,
+        email: `f03-${index}-${suffix}@example.test`,
+        phone: '',
+        address: '',
+        department: 'Testing',
+        designation: 'Test Role',
+        joining_date: '2025-01-01',
+        per_day_salary: 100,
+        monthly_salary: 2600,
+        overtime_rate: 10,
+        status: 'active' as const,
+      }))
+    );
+    const payrolls = await Promise.all(
+      employees.map((employee, index) =>
+        Payroll.create({
+          employee_id: employee.employee_id,
+          month: 7,
+          year: 2025,
+          working_days: 26,
+          present_days: 1,
+          absent_days: 0,
+          leave_days: 0,
+          half_days: 0,
+          overtime_hours: 0,
+          extra_working_days: 0,
+          per_day_salary: 100,
+          basic_salary: 100,
+          extra_day_salary: 0,
+          overtime_salary: 0,
+          bonus: 0,
+          deductions: 0,
+          net_salary: 100,
+          status: statuses[index],
+        })
+      )
+    );
+
+    const finalizedAll = await request(app)
+      .post('/api/admin/payroll/finalize-all')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ month: 7, year: 2025 });
+
+    expect(finalizedAll.status).toBe(200);
+    expect(finalizedAll.body.modifiedCount).toBe(1);
+    expect(await Promise.all(payrolls.map(async (payroll) => (
+      (await Payroll.findById(payroll._id))?.status
+    )))).toEqual(['Finalized', 'Finalized', 'Paid']);
+
+    for (const index of [1, 2]) {
+      const payroll = payrolls[index];
+      const edit = await request(app)
+        .put(`/api/admin/payroll/${payroll._id.toString()}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ bonus: 50 });
+      expect(edit.status).toBe(409);
+
+      const recalculation = await request(app)
+        .post('/api/admin/payroll/generate')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ month: 7, year: 2025, employee_id: payroll.employee_id });
+      expect(recalculation.status).toBe(409);
+      expect((await Payroll.findById(payroll._id))?.net_salary).toBe(100);
+    }
   });
 
   it('processes a catalog sale using the server-side product price', async () => {
