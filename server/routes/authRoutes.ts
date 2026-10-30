@@ -1,6 +1,14 @@
 import { Router, Request, Response } from 'express';
 import mongoose from 'mongoose';
-import { User, Employee, Session, hashPassword, verifyPassword, logAudit } from '../db.ts';
+import {
+  User,
+  Employee,
+  Session,
+  hashPassword,
+  verifyPassword,
+  logAuditBestEffort,
+  logAuditStrict,
+} from '../db.ts';
 import { createSession, authenticateToken, AuthRequest } from '../auth.ts';
 import { authRateLimiter } from '../middleware/rateLimiter.ts';
 import { isProduction } from '../environment.ts';
@@ -72,9 +80,9 @@ router.post('/login', authRateLimiter, async (req: Request, res: Response) => {
     }
 
     if (user.role === 'SUPER_ADMIN') {
-      await logAudit(user.username, 'H.M. Rajpal (Owner)', 'SUPER_ADMIN_LOGIN', 'Owner Console', '', 'Store Owner logged in successfully');
+      await logAuditBestEffort(user.username, 'H.M. Rajpal (Owner)', 'SUPER_ADMIN_LOGIN', 'Owner Console', '', 'Store Owner logged in successfully');
     } else if (user.role === 'ADMIN') {
-      await logAudit(user.username, employee?.name || user.username || 'Store Manager', 'ADMIN_LOGIN', 'Admin Portal', '', 'Logged in successfully');
+      await logAuditBestEffort(user.username, employee?.name || user.username || 'Store Manager', 'ADMIN_LOGIN', 'Admin Portal', '', 'Logged in successfully');
     }
 
     let displayName = employee?.name;
@@ -176,15 +184,23 @@ router.post('/setup-admin', authRateLimiter, async (req: Request, res: Response)
           existingUser.status = 'active';
           await existingUser.save({ session });
           await Session.deleteMany({ user_id: existingUser._id.toString() }, { session });
+          await logAuditStrict(
+            adminUsername,
+            'Setup API',
+            'SUPER_ADMIN_PASSWORD_RESET',
+            `User #${existingUser._id.toString()}`,
+            session,
+            '',
+            'Authorized Super Admin credentials reset'
+          );
         });
       } finally {
         await session.endSession();
       }
 
-      await logAudit(adminUsername, 'Setup API', 'SUPER_ADMIN_PASSWORD_RESET', 'users', '', `Authorized Super Admin password reset for ${trimmedEmail}`);
       return res.json({ success: true, message: 'Administrator credentials updated successfully.' });
     } else {
-      await User.create({
+      const newUser = new User({
         username: adminUsername,
         email: trimmedEmail,
         password_hash: passwordHash,
@@ -193,8 +209,23 @@ router.post('/setup-admin', authRateLimiter, async (req: Request, res: Response)
         status: 'active',
         created_at: new Date(),
       });
-
-      await logAudit(adminUsername, 'Setup API', 'SUPER_ADMIN_CREATED', 'users', '', `Created initial Super Admin for ${trimmedEmail}`);
+      const session = await User.startSession();
+      try {
+        await session.withTransaction(async () => {
+          await newUser.save({ session });
+          await logAuditStrict(
+            adminUsername,
+            'Setup API',
+            'SUPER_ADMIN_CREATED',
+            `User #${newUser._id.toString()}`,
+            session,
+            '',
+            'Initial Super Admin account created'
+          );
+        });
+      } finally {
+        await session.endSession();
+      }
       return res.json({ success: true, message: 'Super Administrator created successfully.' });
     }
   } catch (err: any) {

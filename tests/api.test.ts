@@ -21,7 +21,7 @@ process.env.SESSION_SECRET = 'test-session-secret-with-more-than-thirty-two-char
 const mongoose = (await import('mongoose')).default;
 await mongoose.connect(process.env.MONGODB_URI);
 
-const { Attendance, Category, Employee, Payroll, Product, Sale, Session, Setting, User, hashPassword } =
+const { Attendance, AuditLog, Category, Employee, Payroll, Product, Sale, Session, Setting, User, hashPassword } =
   await import('../server/db.ts');
 const { default: authRoutes } = await import('../server/routes/authRoutes.ts');
 const { default: adminRoutes } = await import('../server/routes/adminRoutes.ts');
@@ -404,6 +404,96 @@ describe('API characterization', () => {
     expect(invalidAttendanceLimit.status).toBe(400);
     expect(EMPLOYEE_PAGE_SIZE_DEFAULT).toBe(50);
     expect(ATTENDANCE_PAGE_SIZE_DEFAULT).toBe(100);
+  });
+
+  it('rolls back payroll finalization when its strict audit write fails', async () => {
+    const payroll = await Payroll.create({
+      employee_id: employeeId,
+      month: 7,
+      year: 2048,
+      working_days: 26,
+      per_day_salary: 800,
+      basic_salary: 800,
+      net_salary: 800,
+      status: 'Draft',
+    });
+    const auditWrite = vi.spyOn(AuditLog, 'create').mockRejectedValueOnce(new Error('forced audit failure'));
+
+    try {
+      const response = await request(app)
+        .put('/api/admin/payroll/status')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ payroll_id: payroll._id.toString(), status: 'Finalized' });
+
+      expect(response.status).toBe(500);
+      expect(response.body.error).toBe('Failed to update payroll status.');
+      expect(JSON.stringify(response.body)).not.toContain('forced audit failure');
+      expect((await Payroll.findById(payroll._id))?.status).toBe('Draft');
+    } finally {
+      auditWrite.mockRestore();
+      await Payroll.deleteOne({ _id: payroll._id });
+    }
+  });
+
+  it('rolls back employee archive when its strict audit write fails', async () => {
+    const archiveId = `F15-ARCHIVE-${suffix}`;
+    await Employee.create({
+      employee_id: archiveId,
+      name: 'F15 Archive Test',
+      email: `f15-archive-${suffix}@example.test`,
+      department: 'F15-Test',
+      designation: 'Test Worker',
+      joining_date: '2026-01-01',
+      per_day_salary: 800,
+      monthly_salary: 20800,
+      overtime_rate: 150,
+      status: 'active',
+      is_active: true,
+    });
+    const auditWrite = vi.spyOn(AuditLog, 'create').mockRejectedValueOnce(new Error('forced audit failure'));
+
+    try {
+      const response = await request(app)
+        .delete(`/api/admin/employees/${archiveId}`)
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(response.status).toBe(500);
+      expect(response.body.error).toBe('Failed to delete employee.');
+      expect(JSON.stringify(response.body)).not.toContain('forced audit failure');
+      expect(await Employee.findOne({ employee_id: archiveId })).toMatchObject({
+        status: 'active',
+        is_active: true,
+      });
+    } finally {
+      auditWrite.mockRestore();
+      await Employee.deleteOne({ employee_id: archiveId });
+    }
+  });
+
+  it('logs best-effort audit failures while allowing the business operation', async () => {
+    const categoryCode = `F15-${suffix}`.toUpperCase();
+    const auditWrite = vi.spyOn(AuditLog, 'create').mockRejectedValueOnce(new Error('forced audit failure'));
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      const response = await request(app)
+        .post('/api/shop/categories')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ name: 'F15 Audit Failure Test', code: categoryCode });
+
+      expect(response.status).toBe(201);
+      expect(await Category.exists({ code: categoryCode })).not.toBeNull();
+      const loggedLine = errorLog.mock.calls
+        .flat()
+        .find((value) => typeof value === 'string' && value.includes('AUDIT_WRITE_FAILED'));
+      expect(loggedLine).toContain('"action":"CATEGORY_CREATED"');
+      expect(loggedLine).toContain(`"entityId":"Category ${categoryCode} (F15 Audit Failure Test)"`);
+      expect(loggedLine).toContain('"error":"forced audit failure"');
+    } finally {
+      auditWrite.mockRestore();
+      errorLog.mockRestore();
+      await Category.deleteOne({ code: categoryCode });
+    }
   });
 
   it('filters attendance by inclusive date range and employee with pagination', async () => {

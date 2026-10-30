@@ -6,7 +6,7 @@ import {
   Setting,
   AuditLog,
   Session,
-  logAudit,
+  logAuditStrict,
   hashPassword,
 } from '../db.ts';
 import { authenticateToken, requireSuperAdmin, AuthRequest } from '../auth.ts';
@@ -196,25 +196,32 @@ router.post('/admins', async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ error: 'A user with this username or email already exists.' });
     }
 
-    const hashed = hashPassword(password);
-    const newAdmin = await User.create({
+    const newAdmin = new User({
       username: cleanUsername,
       email: cleanEmail,
-      password_hash: hashed,
+      password_hash: hashPassword(password),
       role: assignedRole,
       employee_id: null,
       status: 'active',
       created_at: new Date(),
     });
-
-    await logAudit(
-      req.user!.username,
-      req.user!.name || 'Owner',
-      'ADMIN_ACCOUNT_CREATED',
-      `Account @${cleanUsername} (${cleanEmail})`,
-      '',
-      `Role: ${assignedRole}`
-    );
+    const session = await User.startSession();
+    try {
+      await session.withTransaction(async () => {
+        await newAdmin.save({ session });
+        await logAuditStrict(
+          req.user!.username,
+          req.user!.name || 'Owner',
+          'ADMIN_ACCOUNT_CREATED',
+          `Account #${newAdmin._id.toString()} (@${cleanUsername})`,
+          session,
+          '',
+          `Role: ${assignedRole}`
+        );
+      });
+    } finally {
+      await session.endSession();
+    }
 
     return res.status(201).json({
       success: true,
@@ -266,28 +273,26 @@ router.put('/admins/:id', async (req: AuthRequest, res: Response) => {
     }
 
     const shouldRevokeSessions = status === 'inactive' || (password !== undefined && password !== '');
-    if (shouldRevokeSessions) {
-      const session = await User.startSession();
-      try {
-        await session.withTransaction(async () => {
-          await targetUser.save({ session });
+    const session = await User.startSession();
+    try {
+      await session.withTransaction(async () => {
+        await targetUser.save({ session });
+        if (shouldRevokeSessions) {
           await Session.deleteMany({ user_id: targetUser._id.toString() }, { session });
-        });
-      } finally {
-        await session.endSession();
-      }
-    } else {
-      await targetUser.save();
+        }
+        await logAuditStrict(
+          req.user!.username,
+          req.user!.name || 'Owner',
+          'ADMIN_ACCOUNT_MODIFIED',
+          `Account #${adminId} (@${targetUser.username})`,
+          session,
+          '',
+          `Status: ${targetUser.status}, Role: ${targetUser.role}`
+        );
+      });
+    } finally {
+      await session.endSession();
     }
-
-    await logAudit(
-      req.user!.username,
-      req.user!.name || 'Owner',
-      'ADMIN_ACCOUNT_MODIFIED',
-      `Account #${adminId} (@${targetUser.username})`,
-      '',
-      `Status: ${targetUser.status}, Role: ${targetUser.role}`
-    );
 
     return res.json({ success: true, message: `Admin account @${targetUser.username} updated.` });
   } catch (err: any) {
@@ -309,16 +314,23 @@ router.delete('/admins/:id', async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ error: 'You cannot delete your own Super Admin account.' });
     }
 
-    await User.findByIdAndDelete(adminId);
-
-    await logAudit(
-      req.user!.username,
-      req.user!.name || 'Owner',
-      'ADMIN_ACCOUNT_DELETED',
-      `Account #${adminId} (@${targetUser.username})`,
-      `Role: ${targetUser.role}`,
-      'Account deleted'
-    );
+    const session = await User.startSession();
+    try {
+      await session.withTransaction(async () => {
+        await User.deleteOne({ _id: adminId }, { session });
+        await logAuditStrict(
+          req.user!.username,
+          req.user!.name || 'Owner',
+          'ADMIN_ACCOUNT_DELETED',
+          `Account #${adminId} (@${targetUser.username})`,
+          session,
+          `Role: ${targetUser.role}`,
+          'Account deleted'
+        );
+      });
+    } finally {
+      await session.endSession();
+    }
 
     return res.json({ success: true, message: `Admin account @${targetUser.username} removed.` });
   } catch (err: any) {

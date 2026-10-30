@@ -1,6 +1,12 @@
 import 'dotenv/config';
 import mongoose from 'mongoose';
-import { User, Session, initDatabase, hashPassword, logAudit } from '../server/db.ts';
+import {
+  User,
+  Session,
+  initDatabase,
+  hashPassword,
+  logAuditStrict,
+} from '../server/db.ts';
 
 /**
  * CLI Administrator Setup & Credential Management Script (MongoDB)
@@ -86,22 +92,23 @@ async function runSetup() {
           existing.status = 'active';
           await existing.save({ session });
           await Session.deleteMany({ user_id: existing._id.toString() }, { session });
+          await logAuditStrict(
+            cleanUsername,
+            'CLI Setup Tool',
+            'SUPER_ADMIN_PASSWORD_RESET',
+            `User #${existing._id.toString()}`,
+            session,
+            '',
+            'Authorized administrator credentials reset'
+          );
         });
       } finally {
         await session.endSession();
       }
 
-      await logAudit(
-        cleanUsername,
-        'CLI Setup Tool',
-        'SUPER_ADMIN_PASSWORD_RESET',
-        'users',
-        '',
-        `Authorized administrator password reset for ${email} (ID: ${existing._id})`
-      );
       console.log(`[SUCCESS] Authorized administrator credential reset completed for ${email} (ID: ${existing._id}).`);
     } else {
-      const newUser = await User.create({
+      const newUser = new User({
         username: cleanUsername,
         email: cleanEmail,
         password_hash: passwordHash,
@@ -110,15 +117,23 @@ async function runSetup() {
         status: 'active',
         created_at: new Date(),
       });
-
-      await logAudit(
-        cleanUsername,
-        'CLI Setup Tool',
-        'SUPER_ADMIN_CREATED',
-        'users',
-        '',
-        `Initial Super Admin created for ${email}`
-      );
+      const session = await User.startSession();
+      try {
+        await session.withTransaction(async () => {
+          await newUser.save({ session });
+          await logAuditStrict(
+            cleanUsername,
+            'CLI Setup Tool',
+            'SUPER_ADMIN_CREATED',
+            `User #${newUser._id.toString()}`,
+            session,
+            '',
+            'Initial Super Admin account created'
+          );
+        });
+      } finally {
+        await session.endSession();
+      }
       console.log(`[SUCCESS] New Super Admin account created successfully for ${email} (ID: ${newUser._id}).`);
     }
 

@@ -8,7 +8,7 @@ import {
   Supplier,
   Sale,
   InvoiceCounter,
-  logAudit,
+  logAuditBestEffort,
 } from '../db.ts';
 import { authenticateToken, requireAdmin, AuthRequest } from '../auth.ts';
 import { getBusinessDate } from '../../shared/businessDate.ts';
@@ -71,7 +71,7 @@ router.post('/categories', async (req: AuthRequest, res: Response) => {
       created_at: new Date(),
     });
 
-    await logAudit(
+    await logAuditBestEffort(
       req.user!.username,
       req.user!.name || 'Admin',
       'CATEGORY_CREATED',
@@ -195,7 +195,7 @@ router.post('/products', async (req: AuthRequest, res: Response) => {
       created_at: new Date(),
     });
 
-    await logAudit(
+    await logAuditBestEffort(
       req.user!.username,
       req.user!.name || 'Admin',
       'PRODUCT_CREATED',
@@ -248,7 +248,7 @@ router.put('/products/:id', async (req: AuthRequest, res: Response) => {
 
     await prod.save();
 
-    await logAudit(
+    await logAuditBestEffort(
       req.user!.username,
       req.user!.name || 'Admin',
       'PRODUCT_UPDATED',
@@ -271,7 +271,7 @@ router.delete('/products/:id', async (req: AuthRequest, res: Response) => {
       return res.status(404).json({ error: 'Product not found.' });
     }
 
-    await logAudit(
+    await logAuditBestEffort(
       req.user!.username,
       req.user!.name || 'Admin',
       'PRODUCT_DELETED',
@@ -306,7 +306,7 @@ router.post('/products/:id/adjust-stock', async (req: AuthRequest, res: Response
     prod.stock_quantity = Math.max(0, oldStock + delta);
     await prod.save();
 
-    await logAudit(
+    await logAuditBestEffort(
       req.user!.username,
       req.user!.name || 'Admin',
       'STOCK_ADJUSTMENT',
@@ -669,7 +669,7 @@ router.post('/sales', async (req: AuthRequest, res: Response) => {
       throw new Error('Sale transaction completed without creating an invoice.');
     }
 
-    await logAudit(
+    await logAuditBestEffort(
       req.user!.username,
       cashier,
       'BILL_GENERATED',

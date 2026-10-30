@@ -7,7 +7,8 @@ import {
   AuditLog,
   Session,
   User,
-  logAudit,
+  logAuditBestEffort,
+  logAuditStrict,
   hashPassword,
 } from '../db.ts';
 import { authenticateToken, requireAdmin, AuthRequest } from '../auth.ts';
@@ -33,6 +34,11 @@ router.use(authenticateToken);
 router.use(requireAdmin);
 
 class EmployeeArchiveConflictError extends Error {}
+class PayrollConflictError extends Error {
+  constructor(message = 'Payroll changed while being generated. Refresh and retry.') {
+    super(message);
+  }
+}
 
 function parsePositiveSalary(value: unknown): number | undefined {
   if (
@@ -491,6 +497,15 @@ router.post('/employees', async (req: AuthRequest, res: Response) => {
         await employee.save({ session });
         await user.save({ session });
         newEmp = employee;
+        await logAuditStrict(
+          req.user!.username,
+          req.user!.name || 'Admin',
+          'EMPLOYEE_ADDED',
+          `Employee ${newEmpId} (${name})`,
+          session,
+          '',
+          `Designation: ${designation}, Dept: ${department}, Monthly Salary: ₹${mSalary}`
+        );
       });
     } finally {
       await session.endSession();
@@ -498,15 +513,6 @@ router.post('/employees', async (req: AuthRequest, res: Response) => {
     if (!newEmp) {
       throw new Error('Employee account transaction completed without creating records.');
     }
-
-    await logAudit(
-      req.user!.username,
-      req.user!.name || 'Admin',
-      'EMPLOYEE_ADDED',
-      `Employee ${newEmpId} (${name})`,
-      '',
-      `Designation: ${designation}, Dept: ${department}, Monthly Salary: ₹${mSalary}`
-    );
 
     return res.status(201).json({
       success: true,
@@ -584,43 +590,38 @@ router.put('/employees/:id', async (req: AuthRequest, res: Response) => {
     }
 
     const shouldRevokeEmployeeSessions = deactivatedAt !== undefined || (password !== undefined && password !== '');
-    if (shouldRevokeEmployeeSessions) {
-      const session = await Employee.startSession();
-      try {
-        await session.withTransaction(async () => {
-          await oldEmp.save({ session });
-          if (deactivatedAt) {
-            const employeeUsers = await User.find({ employee_id: empId }).session(session);
-            for (const user of employeeUsers) {
-              user.set(userUpdate);
-              await user.save({ session });
-            }
-            await Session.deleteMany({ employee_id: empId }, { session });
-          } else {
-            if (Object.keys(userUpdate).length > 0) {
-              await User.updateMany({ employee_id: empId }, { $set: userUpdate }, { session });
-            }
+    const session = await Employee.startSession();
+    try {
+      await session.withTransaction(async () => {
+        await oldEmp.save({ session });
+        if (deactivatedAt) {
+          const employeeUsers = await User.find({ employee_id: empId }).session(session);
+          for (const user of employeeUsers) {
+            user.set(userUpdate);
+            await user.save({ session });
+          }
+          await Session.deleteMany({ employee_id: empId }, { session });
+        } else {
+          if (Object.keys(userUpdate).length > 0) {
+            await User.updateMany({ employee_id: empId }, { $set: userUpdate }, { session });
+          }
+          if (shouldRevokeEmployeeSessions) {
             await Session.deleteMany({ employee_id: empId }, { session });
           }
-        });
-      } finally {
-        await session.endSession();
-      }
-    } else {
-      await oldEmp.save();
-      if (Object.keys(userUpdate).length > 0) {
-        await User.updateMany({ employee_id: empId }, { $set: userUpdate });
-      }
+        }
+        await logAuditStrict(
+          req.user!.username,
+          req.user!.name || 'Admin',
+          deactivatedAt ? 'EMPLOYEE_ARCHIVED' : 'EMPLOYEE_UPDATED',
+          `Employee ${empId} (${oldEmp.name})`,
+          session,
+          `Status: ${previousStatus}, Salary: ₹${previousMonthlySalary}`,
+          `Status: ${status || oldEmp.status}, Salary: ₹${mSalary}`
+        );
+      });
+    } finally {
+      await session.endSession();
     }
-
-    await logAudit(
-      req.user!.username,
-      req.user!.name || 'Admin',
-      deactivatedAt ? 'EMPLOYEE_ARCHIVED' : 'EMPLOYEE_UPDATED',
-      `Employee ${empId} (${oldEmp.name})`,
-      `Status: ${previousStatus}, Salary: ₹${previousMonthlySalary}`,
-      `Status: ${status || oldEmp.status}, Salary: ₹${mSalary}`
-    );
 
     return res.json({
       success: true,
@@ -675,6 +676,15 @@ router.delete('/employees/:id', async (req: AuthRequest, res: Response) => {
           await user.save({ session });
         }
         await Session.deleteMany({ employee_id: empId }, { session });
+        await logAuditStrict(
+          req.user!.username,
+          req.user!.name || 'Admin',
+          'EMPLOYEE_ARCHIVED',
+          `Employee ${empId} (${emp.name})`,
+          session,
+          `Dept: ${emp.department}`,
+          `Archived at ${archivedAt.toISOString()} by ${archivedBy}`
+        );
       });
     } catch (error) {
       if (error instanceof EmployeeArchiveConflictError) {
@@ -684,15 +694,6 @@ router.delete('/employees/:id', async (req: AuthRequest, res: Response) => {
     } finally {
       await session.endSession();
     }
-
-    await logAudit(
-      req.user!.username,
-      req.user!.name || 'Admin',
-      'EMPLOYEE_ARCHIVED',
-      `Employee ${empId} (${emp.name})`,
-      `Dept: ${emp.department}`,
-      `Archived at ${archivedAt.toISOString()} by ${archivedBy}`
-    );
 
     return res.json({ success: true, message: `Employee ${empId} (${emp.name}) archived successfully.` });
   } catch (err: any) {
@@ -1019,7 +1020,7 @@ async function handleBatchAttendance(req: AuthRequest, res: Response) {
       );
     }
 
-    await logAudit(
+    await logAuditBestEffort(
       req.user!.username,
       adminName,
       'ATTENDANCE_BULK_LOGGED',
@@ -1101,7 +1102,7 @@ router.delete('/attendance/:id', async (req: AuthRequest, res: Response) => {
       return res.status(404).json({ error: 'Attendance record not found.' });
     }
 
-    await logAudit(
+    await logAuditBestEffort(
       req.user!.username,
       req.user!.name || 'Admin',
       'ATTENDANCE_DELETED',
@@ -1199,117 +1200,121 @@ router.post('/payroll/generate', async (req: AuthRequest, res: Response) => {
     const qMonth = month ? parseInt(String(month), 10) : businessDate.month;
     const qYear = year ? parseInt(String(year), 10) : businessDate.year;
 
-    const stdSetting = await Setting.findOne({ key: 'standard_working_days' });
-    const standardWorkingDays = stdSetting ? parseFloat(stdSetting.value) : 26;
-
-    const leavePaidSetting = await Setting.findOne({ key: 'leave_is_paid' });
-    const leaveIsPaid = leavePaidSetting?.value === 'true';
-
     const empQuery: any = { status: 'active' };
     if (employee_id && employee_id !== 'All') {
       empQuery.employee_id = employee_id;
     }
-    const employees = await Employee.find(empQuery);
-
-    const employeeIds = employees.map((employee) => employee.employee_id);
-    const lockedPayroll = await Payroll.exists({
-      employee_id: { $in: employeeIds },
-      month: qMonth,
-      year: qYear,
-      status: { $in: ['Finalized', 'Paid'] },
-    });
-    if (lockedPayroll) {
-      return res.status(409).json({ error: 'Finalized or paid payroll cannot be recalculated.' });
-    }
-
-    const monthPrefix = `${qYear}-${String(qMonth).padStart(2, '0')}`;
-    const allAtt = await Attendance.find({ date: new RegExp(`^${monthPrefix}`) });
-
-    const attMap: Record<string, { present: number; absent: number; leave: number; halfDay: number; ot: number }> = {};
-    for (const r of allAtt) {
-      if (!attMap[r.employee_id]) {
-        attMap[r.employee_id] = { present: 0, absent: 0, leave: 0, halfDay: 0, ot: 0 };
-      }
-      if (r.status === 'Present') attMap[r.employee_id].present++;
-      else if (r.status === 'Absent') attMap[r.employee_id].absent++;
-      else if (r.status === 'Leave') attMap[r.employee_id].leave++;
-      else if (r.status === 'Half Day') attMap[r.employee_id].halfDay++;
-      attMap[r.employee_id].ot += r.overtime_hours || 0;
-    }
-
     const adminName = req.user!.name || req.user!.username || 'Admin';
     let processedCount = 0;
-
-    for (const emp of employees) {
-      const payrollKey = { employee_id: emp.employee_id, month: qMonth, year: qYear };
-      const existing = await Payroll.findOne(payrollKey).select({ status: 1 }).lean();
-      if (existing && existing.status !== 'Draft') {
-        return res.status(409).json({ error: 'Payroll changed while being generated. Refresh and retry.' });
-      }
-
-      const stats = attMap[emp.employee_id] || { present: 0, absent: 0, leave: 0, halfDay: 0, ot: 0 };
-      const paidLeaveDays = leaveIsPaid ? stats.leave : 0;
-      const actualPaidDays = stats.present + (stats.halfDay * 0.5) + paidLeaveDays;
-
-      const baseDaysForBasic = Math.min(actualPaidDays, standardWorkingDays);
-      const basicSalary = Math.round(baseDaysForBasic * emp.per_day_salary);
-
-      const extraWorkingDays = Math.max(0, actualPaidDays - standardWorkingDays);
-      const extraDaySalary = Math.round(extraWorkingDays * emp.per_day_salary);
-      const overtimeSalary = Math.round(stats.ot * emp.overtime_rate);
-      const bonus = 0;
-      const deductions = 0;
-      const netSalary = basicSalary + extraDaySalary + overtimeSalary + bonus - deductions;
-
-      const payrollValues = {
-        working_days: standardWorkingDays,
-        present_days: stats.present,
-        absent_days: stats.absent,
-        leave_days: stats.leave,
-        half_days: stats.halfDay,
-        overtime_hours: stats.ot,
-        extra_working_days: extraWorkingDays,
-        per_day_salary: emp.per_day_salary,
-        basic_salary: basicSalary,
-        extra_day_salary: extraDaySalary,
-        overtime_salary: overtimeSalary,
-        bonus,
-        deductions,
-        net_salary: netSalary,
-        status: 'Finalized' as const,
-        generated_by: adminName,
-      };
-
-      if (existing) {
-        const updated = await Payroll.findOneAndUpdate(
-          { ...payrollKey, status: 'Draft' },
-          { $set: payrollValues },
-          { returnDocument: 'after', runValidators: true }
-        );
-        if (!updated) {
-          return res.status(409).json({ error: 'Payroll changed while being generated. Refresh and retry.' });
-        }
-      } else {
-        try {
-          await Payroll.create({ ...payrollKey, ...payrollValues });
-        } catch (error) {
-          if (!isDuplicateKeyError(error) || !(await Payroll.exists(payrollKey))) {
-            throw error;
+    const session = await Payroll.startSession();
+    try {
+      try {
+        await session.withTransaction(async () => {
+          processedCount = 0;
+          const stdSetting = await Setting.findOne({ key: 'standard_working_days' }).session(session);
+          const standardWorkingDays = stdSetting ? parseFloat(stdSetting.value) : 26;
+          const leavePaidSetting = await Setting.findOne({ key: 'leave_is_paid' }).session(session);
+          const leaveIsPaid = leavePaidSetting?.value === 'true';
+          const employees = await Employee.find(empQuery).session(session);
+          const employeeIds = employees.map((employee) => employee.employee_id);
+          const existingPayroll = await Payroll.find({
+            employee_id: { $in: employeeIds },
+            month: qMonth,
+            year: qYear,
+          }).session(session).lean();
+          if (existingPayroll.some((payroll) => payroll.status !== 'Draft')) {
+            throw new PayrollConflictError('Finalized or paid payroll cannot be recalculated.');
           }
-          return res.status(409).json({ error: 'Payroll changed while being generated. Refresh and retry.' });
-        }
-      }
-      processedCount++;
-    }
 
-    await logAudit(
-      req.user!.username,
-      adminName,
-      'PAYROLL_GENERATED',
-      `Period: ${qMonth}/${qYear}`,
-      '',
-      `Generated payroll disbursements for ${processedCount} employees`
-    );
+          const existingPayrollByEmployee = new Map(
+            existingPayroll.map((payroll) => [payroll.employee_id, payroll])
+          );
+          const monthPrefix = `${qYear}-${String(qMonth).padStart(2, '0')}`;
+          const allAtt = await Attendance.find({
+            date: new RegExp(`^${monthPrefix}`),
+          }).session(session);
+          const attMap: Record<string, { present: number; absent: number; leave: number; halfDay: number; ot: number }> = {};
+          for (const r of allAtt) {
+            if (!attMap[r.employee_id]) {
+              attMap[r.employee_id] = { present: 0, absent: 0, leave: 0, halfDay: 0, ot: 0 };
+            }
+            if (r.status === 'Present') attMap[r.employee_id].present++;
+            else if (r.status === 'Absent') attMap[r.employee_id].absent++;
+            else if (r.status === 'Leave') attMap[r.employee_id].leave++;
+            else if (r.status === 'Half Day') attMap[r.employee_id].halfDay++;
+            attMap[r.employee_id].ot += r.overtime_hours || 0;
+          }
+
+          for (const emp of employees) {
+            const payrollKey = { employee_id: emp.employee_id, month: qMonth, year: qYear };
+            const stats = attMap[emp.employee_id] || { present: 0, absent: 0, leave: 0, halfDay: 0, ot: 0 };
+            const paidLeaveDays = leaveIsPaid ? stats.leave : 0;
+            const actualPaidDays = stats.present + (stats.halfDay * 0.5) + paidLeaveDays;
+            const baseDaysForBasic = Math.min(actualPaidDays, standardWorkingDays);
+            const basicSalary = Math.round(baseDaysForBasic * emp.per_day_salary);
+            const extraWorkingDays = Math.max(0, actualPaidDays - standardWorkingDays);
+            const extraDaySalary = Math.round(extraWorkingDays * emp.per_day_salary);
+            const overtimeSalary = Math.round(stats.ot * emp.overtime_rate);
+            const bonus = 0;
+            const deductions = 0;
+            const netSalary = basicSalary + extraDaySalary + overtimeSalary + bonus - deductions;
+            const payrollValues = {
+              working_days: standardWorkingDays,
+              present_days: stats.present,
+              absent_days: stats.absent,
+              leave_days: stats.leave,
+              half_days: stats.halfDay,
+              overtime_hours: stats.ot,
+              extra_working_days: extraWorkingDays,
+              per_day_salary: emp.per_day_salary,
+              basic_salary: basicSalary,
+              extra_day_salary: extraDaySalary,
+              overtime_salary: overtimeSalary,
+              bonus,
+              deductions,
+              net_salary: netSalary,
+              status: 'Finalized' as const,
+              generated_by: adminName,
+            };
+            const existing = existingPayrollByEmployee.get(emp.employee_id);
+
+            if (existing) {
+              const updated = await Payroll.findOneAndUpdate(
+                { ...payrollKey, status: 'Draft' },
+                { $set: payrollValues },
+                { session, returnDocument: 'after', runValidators: true }
+              );
+              if (!updated) throw new PayrollConflictError();
+            } else {
+              try {
+                await Payroll.create([{ ...payrollKey, ...payrollValues }], { session });
+              } catch (error) {
+                if (isDuplicateKeyError(error)) throw new PayrollConflictError();
+                throw error;
+              }
+            }
+            processedCount++;
+          }
+
+          await logAuditStrict(
+            req.user!.username,
+            adminName,
+            'PAYROLL_GENERATED',
+            `Period: ${qMonth}/${qYear}`,
+            session,
+            '',
+            `Generated payroll disbursements for ${processedCount} employees`
+          );
+        });
+      } catch (error) {
+        if (error instanceof PayrollConflictError) {
+          return res.status(409).json({ error: error.message });
+        }
+        throw error;
+      }
+    } finally {
+      await session.endSession();
+    }
 
     return res.json({
       success: true,
@@ -1334,35 +1339,53 @@ router.put('/payroll/status', async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ error: 'Payroll status is invalid.' });
     }
 
-    const payroll = await Payroll.findById(payroll_id);
-    if (!payroll) {
-      return res.status(404).json({ error: 'Payroll record not found.' });
+    let notFound = false;
+    let conflict = false;
+    const session = await Payroll.startSession();
+    try {
+      await session.withTransaction(async () => {
+        notFound = false;
+        conflict = false;
+        const payroll = await Payroll.findById(payroll_id).session(session);
+        if (!payroll) {
+          notFound = true;
+          return;
+        }
+
+        const allowedTransition =
+          (payroll.status === 'Draft' && status === 'Finalized') ||
+          (payroll.status === 'Finalized' && status === 'Paid');
+        if (!allowedTransition) {
+          conflict = true;
+          return;
+        }
+
+        const updated = await Payroll.findOneAndUpdate(
+          { _id: payroll_id, status: payroll.status },
+          { $set: { status } },
+          { session, returnDocument: 'after', runValidators: true }
+        );
+        if (!updated) {
+          conflict = true;
+          return;
+        }
+
+        await logAuditStrict(
+          req.user!.username,
+          req.user!.name || 'Admin',
+          'PAYROLL_STATUS_CHANGED',
+          `Payroll #${payroll_id} (${updated.employee_id})`,
+          session,
+          '',
+          `Status updated to: ${status}`
+        );
+      });
+    } finally {
+      await session.endSession();
     }
 
-    const allowedTransition =
-      (payroll.status === 'Draft' && status === 'Finalized') ||
-      (payroll.status === 'Finalized' && status === 'Paid');
-    if (!allowedTransition) {
-      return res.status(409).json({ error: 'Payroll status cannot be changed from its current state.' });
-    }
-
-    const updated = await Payroll.findOneAndUpdate(
-      { _id: payroll_id, status: payroll.status },
-      { $set: { status } },
-      { returnDocument: 'after', runValidators: true }
-    );
-    if (!updated) {
-      return res.status(409).json({ error: 'Payroll status changed. Refresh and retry.' });
-    }
-
-    await logAudit(
-      req.user!.username,
-      req.user!.name || 'Admin',
-      'PAYROLL_STATUS_CHANGED',
-      `Payroll #${payroll_id} (${updated.employee_id})`,
-      '',
-      `Status updated to: ${status}`
-    );
+    if (notFound) return res.status(404).json({ error: 'Payroll record not found.' });
+    if (conflict) return res.status(409).json({ error: 'Payroll status cannot be changed from its current state.' });
 
     return res.json({ success: true, message: `Payroll status updated to ${status}.` });
   } catch (err: any) {
@@ -1378,24 +1401,34 @@ router.post('/payroll/finalize-all', async (req: AuthRequest, res: Response) => 
     const qMonth = month ? parseInt(String(month), 10) : businessDate.month;
     const qYear = year ? parseInt(String(year), 10) : businessDate.year;
 
-    const result = await Payroll.updateMany(
-      { month: qMonth, year: qYear, status: 'Draft' },
-      { $set: { status: 'Finalized' } }
-    );
-
-    await logAudit(
-      req.user!.username,
-      req.user!.name || 'Admin',
-      'PAYROLL_FINALIZED_ALL',
-      `Period: ${qMonth}/${qYear}`,
-      '',
-      `Finalized ${result.modifiedCount} payroll records for ${qMonth}/${qYear}`
-    );
+    let modifiedCount = 0;
+    const session = await Payroll.startSession();
+    try {
+      await session.withTransaction(async () => {
+        const result = await Payroll.updateMany(
+          { month: qMonth, year: qYear, status: 'Draft' },
+          { $set: { status: 'Finalized' } },
+          { session }
+        );
+        modifiedCount = result.modifiedCount;
+        await logAuditStrict(
+          req.user!.username,
+          req.user!.name || 'Admin',
+          'PAYROLL_FINALIZED_ALL',
+          `Period: ${qMonth}/${qYear}`,
+          session,
+          '',
+          `Finalized ${modifiedCount} payroll records for ${qMonth}/${qYear}`
+        );
+      });
+    } finally {
+      await session.endSession();
+    }
 
     return res.json({
       success: true,
-      message: `Successfully finalized ${result.modifiedCount} payroll records for ${qMonth}/${qYear}.`,
-      modifiedCount: result.modifiedCount,
+      message: `Successfully finalized ${modifiedCount} payroll records for ${qMonth}/${qYear}.`,
+      modifiedCount,
     });
   } catch (err: any) {
     console.error('Finalize all payroll error:', err);
@@ -1431,30 +1464,40 @@ router.put('/payroll/:id', async (req: AuthRequest, res: Response) => {
       record.basic_salary + record.extra_day_salary + record.overtime_salary + newBonus - newDeductions
     );
 
-    const updated = await Payroll.findOneAndUpdate(
-      { _id: id, status: 'Draft' },
-      {
-        $set: {
-          bonus: newBonus,
-          deductions: newDeductions,
-          net_salary: newNetSalary,
-          status: newStatus,
-        },
-      },
-      { returnDocument: 'after', runValidators: true }
-    );
+    let updated: typeof record | null = null;
+    const session = await Payroll.startSession();
+    try {
+      await session.withTransaction(async () => {
+        updated = await Payroll.findOneAndUpdate(
+          { _id: id, status: 'Draft' },
+          {
+            $set: {
+              bonus: newBonus,
+              deductions: newDeductions,
+              net_salary: newNetSalary,
+              status: newStatus,
+            },
+          },
+          { session, returnDocument: 'after', runValidators: true }
+        );
+        if (!updated) return;
+
+        await logAuditStrict(
+          req.user!.username,
+          req.user!.name || 'Admin',
+          'PAYROLL_EDITED',
+          `Payroll #${id} (${updated.employee_id})`,
+          session,
+          `Bonus: ₹${record.bonus}, Deductions: ₹${record.deductions}, Net: ₹${record.net_salary}, Status: ${record.status}`,
+          `Bonus: ₹${newBonus}, Deductions: ₹${newDeductions}, Net: ₹${newNetSalary}, Status: ${updated.status}`
+        );
+      });
+    } finally {
+      await session.endSession();
+    }
     if (!updated) {
       return res.status(409).json({ error: 'Payroll status changed. Refresh and retry.' });
     }
-
-    await logAudit(
-      req.user!.username,
-      req.user!.name || 'Admin',
-      'PAYROLL_EDITED',
-      `Payroll #${id} (${updated.employee_id})`,
-      `Bonus: ₹${record.bonus}, Deductions: ₹${record.deductions}, Net: ₹${record.net_salary}, Status: ${record.status}`,
-      `Bonus: ₹${newBonus}, Deductions: ₹${newDeductions}, Net: ₹${newNetSalary}, Status: ${updated.status}`
-    );
 
     return res.json({
       success: true,
@@ -1667,7 +1710,7 @@ router.post('/settings', async (req: AuthRequest, res: Response) => {
       }
     }
 
-    await logAudit(
+    await logAuditBestEffort(
       req.user!.username,
       req.user!.name || 'Admin',
       'STORE_SETTINGS_UPDATED',

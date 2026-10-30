@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import type { ClientSession } from 'mongoose';
 import crypto from 'node:crypto';
 import dotenv from 'dotenv';
 import { MongoMemoryServer } from 'mongodb-memory-server';
@@ -304,7 +305,7 @@ export async function ensureInitialAdmin(): Promise<void> {
     return;
   }
 
-  await User.create({
+  const initialAdmin = new User({
     username,
     email,
     password_hash: hashPassword(password),
@@ -313,22 +314,86 @@ export async function ensureInitialAdmin(): Promise<void> {
     status: 'active',
     created_at: new Date(),
   });
-
-  await logAudit(
-    username,
-    'System Setup',
-    'SUPER_ADMIN_INITIALIZED',
-    'users',
-    '',
-    'Initial Super Admin owner initialized from explicit environment configuration'
-  );
+  const session = await User.startSession();
+  try {
+    await session.withTransaction(async () => {
+      await initialAdmin.save({ session });
+      await logAuditStrict(
+        username,
+        'System Setup',
+        'SUPER_ADMIN_INITIALIZED',
+        `User #${initialAdmin._id.toString()}`,
+        session,
+        '',
+        'Initial Super Admin owner initialized from explicit environment configuration'
+      );
+    });
+  } finally {
+    await session.endSession();
+  }
   console.log('[Database] Initial Super Admin account created from explicit environment configuration.');
 }
 
 /**
  * Creates an audit log record in MongoDB.
  */
-export async function logAudit(
+function createAuditRecord(
+  adminId: string,
+  adminName: string,
+  action: string,
+  recordAffected: string,
+  previousValue: string = '',
+  newValue: string = ''
+): {
+  admin_id: string;
+  admin_name: string;
+  action: string;
+  record_affected: string;
+  previous_value: string;
+  new_value: string;
+  timestamp: Date;
+} {
+  return {
+    admin_id: adminId,
+    admin_name: adminName,
+    action,
+    record_affected: recordAffected,
+    previous_value: previousValue,
+    new_value: newValue,
+    timestamp: new Date(),
+  };
+}
+
+function logAuditWriteFailure(action: string, entityId: string, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`AUDIT_WRITE_FAILED ${JSON.stringify({ action, entityId, error: message })}`);
+}
+
+export async function logAuditStrict(
+  adminId: string,
+  adminName: string,
+  action: string,
+  recordAffected: string,
+  session: ClientSession,
+  previousValue: string = '',
+  newValue: string = ''
+): Promise<void> {
+  try {
+    await AuditLog.create([createAuditRecord(
+      adminId,
+      adminName,
+      action,
+      recordAffected,
+      previousValue,
+      newValue
+    )], { session });
+  } catch (error) {
+    logAuditWriteFailure(action, recordAffected, error);
+    throw error;
+  }
+}
+
+export async function logAuditBestEffort(
   adminId: string,
   adminName: string,
   action: string,
@@ -337,16 +402,15 @@ export async function logAudit(
   newValue: string = ''
 ): Promise<void> {
   try {
-    await AuditLog.create({
-      admin_id: adminId,
-      admin_name: adminName,
+    await AuditLog.create(createAuditRecord(
+      adminId,
+      adminName,
       action,
-      record_affected: recordAffected,
-      previous_value: previousValue,
-      new_value: newValue,
-      timestamp: new Date(),
-    });
-  } catch (err) {
-    console.error('Audit log failure:', err);
+      recordAffected,
+      previousValue,
+      newValue
+    ));
+  } catch (error) {
+    logAuditWriteFailure(action, recordAffected, error);
   }
 }
