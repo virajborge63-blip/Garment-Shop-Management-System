@@ -107,6 +107,8 @@ export async function connectDB(): Promise<typeof mongoose> {
     throw new Error('SESSION_SECRET must be configured with at least 32 characters in production.');
   }
 
+  const useMemoryFallback = !isProduction;
+
   if (configuredUri) {
     try {
       console.log('[Database] Connecting to configured MongoDB instance...');
@@ -117,25 +119,37 @@ export async function connectDB(): Promise<typeof mongoose> {
       console.log('[Database] MongoDB connection established.');
       return mongoose;
     } catch (connectionError) {
-      console.error(
-        '[Database] Could not connect to the configured MongoDB instance.',
-        JSON.stringify(getMongoConnectionDiagnostics(connectionError))
+      if (isProduction) {
+        console.error(
+          '[Database] Could not connect to the configured MongoDB instance.',
+          JSON.stringify(getMongoConnectionDiagnostics(connectionError))
+        );
+        throw new Error('MongoDB connection failed. Check MONGODB_URI, network access, and database availability.');
+      }
+
+      console.warn(
+        '[Database] Configured MongoDB is unavailable in development. Falling back to a local in-memory MongoDB instance.'
       );
-      throw new Error('MongoDB connection failed. Check MONGODB_URI, network access, and database availability.');
+      await mongoose.disconnect().catch(() => undefined);
+      // Fall through to the in-memory development fallback below.
     }
   }
 
-  // Use in-memory MongoDB only for local development without a configured URI.
+  // Use in-memory MongoDB only for development when no persistent database is available.
   if (!mongoMemoryServerInstance) {
-    console.log(`[Database] Initializing automated MongoDB engine (MongoMemoryServer)...`);
+    console.log('[Database] Initializing automated MongoDB engine (MongoMemoryServer)...');
     mongoMemoryServerInstance = await MongoMemoryServer.create();
+  }
+
+  if (!useMemoryFallback && !configuredUri) {
+    throw new Error('MONGODB_URI must be configured in production; in-memory storage is not persistent.');
   }
 
   const memoryUri = mongoMemoryServerInstance.getUri();
   console.log(`[Database] Connecting to local MongoDB engine at: ${memoryUri}`);
   await mongoose.connect(memoryUri);
   isConnected = true;
-  console.log(`[Database] Local MongoDB connected successfully.`);
+  console.log('[Database] Local MongoDB connected successfully.');
   return mongoose;
 }
 
