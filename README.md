@@ -92,6 +92,10 @@ npm start
 
 Production requires `MONGODB_URI` and a `SESSION_SECRET` of at least 32 characters. The server exits with an actionable error if the database is unavailable; it does not switch to temporary storage. The hosting platform must provide `PORT`; the server binds to `0.0.0.0`. Set `NODE_ENV=production`.
 
+### Manual password resets
+
+Password resets are handled manually by the Store Owner; there is no email reset flow. In the Super Admin portal, open **Admin Accounts**, choose **Reset Password** for the manager, and set a new password of at least 12 characters. Employee passwords can be reset from **Admin → Employee Directory → Edit → Reset Password**.
+
 The server does not trust forwarded client IP headers by default. `TRUST_PROXY` is the exact number of trusted proxy hops and must be a non-negative integer; it defaults to `0` for direct connections. For the single-service Render deployment behind one trusted proxy, set `TRUST_PROXY=1` in Render's environment settings. Do not set a hop count unless the deployment topology is controlled.
 
 For a Node.js host, use `npm run build` as the build command and `npm start` as the start command, with the environment variables above configured in the host's secret settings. Provision the first owner using the setup CLI against the same persistent database before giving client users access. No hosting-provider-specific deployment manifest is present in this repository, so provider-specific networking and health-check setup must be completed in that provider's dashboard.

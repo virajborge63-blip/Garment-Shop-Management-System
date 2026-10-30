@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { 
   Lock, Mail, Eye, EyeOff, ShieldCheck, 
-  ArrowRight, KeyRound, AlertCircle, CheckCircle2
+  ArrowRight, AlertCircle
 } from 'lucide-react';
 
 
@@ -13,48 +13,10 @@ export const LoginPage: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
   
-  // Forgot Password modal state
-  const [showForgotPassword, setShowForgotPassword] = useState(false);
-  const [forgotEmail, setForgotEmail] = useState('');
-  const [forgotMsg, setForgotMsg] = useState<string | null>(null);
-  const [isForgotLoading, setIsForgotLoading] = useState(false);
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!identifier || !password) return;
     await login(identifier, password);
-  };
-
-  const handleForgotPassword = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!forgotEmail) return;
-    setIsForgotLoading(true);
-    setForgotMsg(null);
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 15000);
-    try {
-      const res = await fetch('/api/auth/forgot-password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: forgotEmail }),
-        signal: controller.signal,
-      });
-      const data: { message?: string; error?: string } = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setForgotMsg(data.error || 'The password reset service is unavailable. Please contact the Store Owner directly.');
-        return;
-      }
-      setForgotMsg(data.message || 'Contact the Store Owner directly to arrange a password reset.');
-    } catch (err) {
-      setForgotMsg(
-        err instanceof Error && err.name === 'AbortError'
-          ? 'The request timed out. Contact the Store Owner directly to arrange a password reset.'
-          : 'Could not reach the password reset service. Contact the Store Owner directly.'
-      );
-    } finally {
-      window.clearTimeout(timeout);
-      setIsForgotLoading(false);
-    }
   };
 
   return (
@@ -128,14 +90,9 @@ export const LoginPage: React.FC = () => {
                 <label htmlFor="password" id="password-label" className="block text-xs font-semibold text-slate-300">
                   Password
                 </label>
-                <button
-                  id="forgot-password-link"
-                  type="button"
-                  onClick={() => setShowForgotPassword(true)}
-                  className="text-xs font-medium text-amber-400 hover:text-amber-300 transition-colors"
-                >
-                  Forgot Password?
-                </button>
+                <span className="text-xs font-medium text-amber-400">
+                  Contact the owner to reset your password.
+                </span>
               </div>
               <div className="relative rounded-xl shadow-sm">
                 <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
@@ -206,79 +163,6 @@ export const LoginPage: React.FC = () => {
           </p>
         </div>
       </div>
-
-      {/* Forgot Password Modal */}
-      {showForgotPassword && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl relative">
-            <h3 className="text-lg font-bold text-white flex items-center gap-2">
-              <KeyRound className="w-5 h-5 text-amber-400" />
-              Forgot Password
-            </h3>
-            <p className="mt-1 text-xs text-slate-400">
-              Password resets are handled directly by the Store Owner; this form does not send email.
-            </p>
-
-            {forgotMsg ? (
-              <div className="mt-4 p-3.5 bg-amber-500/10 border border-amber-500/20 rounded-xl text-xs text-amber-300 flex items-start gap-2">
-                <CheckCircle2 className="w-4 h-4 shrink-0 text-amber-400 mt-0.5" />
-                <span className="leading-relaxed">{forgotMsg}</span>
-              </div>
-            ) : (
-              <form onSubmit={handleForgotPassword} className="mt-4 space-y-3">
-                <div>
-                  <label htmlFor="forgot-email" className="block text-xs font-medium text-slate-300">
-                    Registered Email Address
-                  </label>
-                  <input
-                    id="forgot-email"
-                    type="email"
-                    required
-                    value={forgotEmail}
-                    onChange={(e) => setForgotEmail(e.target.value)}
-                    placeholder="name@business.com"
-                    className="mt-1 block w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-slate-100 placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
-                  />
-                </div>
-                <div className="pt-2 flex justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowForgotPassword(false);
-                      setForgotMsg(null);
-                    }}
-                    className="px-3.5 py-2 text-xs font-medium text-slate-300 hover:text-white bg-slate-800 rounded-lg"
-                  >
-                    Close
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={isForgotLoading}
-                    className="px-4 py-2 text-xs font-bold text-slate-950 bg-amber-500 hover:bg-amber-400 rounded-lg shadow-md"
-                  >
-                    {isForgotLoading ? 'Sending...' : 'Request Reset'}
-                  </button>
-                </div>
-              </form>
-            )}
-
-            {forgotMsg && (
-              <div className="mt-4 flex justify-end">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowForgotPassword(false);
-                    setForgotMsg(null);
-                  }}
-                  className="px-4 py-2 text-xs font-bold text-slate-950 bg-amber-500 hover:bg-amber-400 rounded-lg shadow-md"
-                >
-                  Back to Sign In
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 };

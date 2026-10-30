@@ -134,6 +134,14 @@ describe('API characterization', () => {
     expect(invalid.body.error).toMatch(/invalid/i);
   });
 
+  it('does not expose a forgot-password reset endpoint', async () => {
+    const response = await request(app)
+      .post('/api/auth/forgot-password')
+      .send({ email: employeeCredentials.email });
+
+    expect(response.status).toBe(404);
+  });
+
   it('requires a setup token when production is inferred from the server entry point', async () => {
     const email = `f06-production-${suffix}@example.test`;
     const previousNodeEnv = process.env.NODE_ENV;

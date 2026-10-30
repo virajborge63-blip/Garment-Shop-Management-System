@@ -253,17 +253,4 @@ router.post('/logout', authenticateToken, async (req: AuthRequest, res: Response
   }
 });
 
-// 5. Forgot Password
-router.post('/forgot-password', authRateLimiter, (req: Request, res: Response) => {
-  const { email } = req.body;
-  if (!email || typeof email !== 'string') {
-    return res.status(400).json({ error: 'Valid email address is required.' });
-  }
-
-  // Safe response: do not leak whether user exists
-  return res.json({
-    message: 'If this address is registered, contact the Store Owner directly to arrange a password reset. This system does not send reset emails.'
-  });
-});
-
 export default router;
