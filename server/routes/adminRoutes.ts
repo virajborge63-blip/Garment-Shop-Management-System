@@ -5,6 +5,7 @@ import {
   Payroll,
   Setting,
   AuditLog,
+  Session,
   User,
   logAudit,
   hashPassword,
@@ -16,6 +17,8 @@ const router = Router();
 // Apply auth + strict admin check to all routes in this router
 router.use(authenticateToken);
 router.use(requireAdmin);
+
+class EmployeeArchiveConflictError extends Error {}
 
 function parsePositiveSalary(value: unknown): number | undefined {
   if (
@@ -236,6 +239,9 @@ router.get('/employees', async (req: AuthRequest, res: Response) => {
     const { search, department, status } = req.query;
     const filter: any = {};
 
+    if (req.query.include_archived !== 'true') {
+      filter.is_active = { $ne: false };
+    }
     if (status && status !== 'All') {
       filter.status = status;
     }
@@ -412,6 +418,9 @@ router.put('/employees/:id', async (req: AuthRequest, res: Response) => {
     if (!oldEmp) {
       return res.status(404).json({ error: 'Employee not found.' });
     }
+    if (oldEmp.is_active === false) {
+      return res.status(409).json({ error: 'Archived employees cannot be edited.' });
+    }
 
     const {
       name, phone, address, department, designation, joining_date,
@@ -424,6 +433,16 @@ router.put('/employees/:id', async (req: AuthRequest, res: Response) => {
     if (pDay === undefined) {
       return res.status(400).json({ error: 'Per-day salary must be a finite number greater than zero.' });
     }
+    if (status !== undefined && !['active', 'inactive'].includes(status)) {
+      return res.status(400).json({ error: 'Employee status is invalid.' });
+    }
+    if (password !== undefined && password !== '' && (typeof password !== 'string' || password.length < 12)) {
+      return res.status(400).json({ error: 'A reset password must be at least 12 characters long.' });
+    }
+
+    const previousStatus = oldEmp.status;
+    const previousMonthlySalary = oldEmp.monthly_salary;
+    const deactivatedAt = status === 'inactive' ? new Date() : undefined;
     const mSalary = monthly_salary !== undefined ? parseFloat(monthly_salary) : oldEmp.monthly_salary;
     const otRate = overtime_rate !== undefined ? parseFloat(overtime_rate) : oldEmp.overtime_rate;
 
@@ -438,39 +457,64 @@ router.put('/employees/:id', async (req: AuthRequest, res: Response) => {
     oldEmp.overtime_rate = otRate;
     oldEmp.status = status || oldEmp.status;
     oldEmp.avatar_url = avatar_url || oldEmp.avatar_url;
-
-    await oldEmp.save();
+    if (deactivatedAt) {
+      oldEmp.is_active = false;
+      oldEmp.archived_at = deactivatedAt;
+      oldEmp.archived_by = req.user!.username;
+    }
 
     // Update user status and password if provided
     const userUpdate: any = {};
     if (status) userUpdate.status = status;
     if (password !== undefined && password !== '') {
-      if (typeof password !== 'string' || password.length < 12) {
-        return res.status(400).json({ error: 'A reset password must be at least 12 characters long.' });
-      }
       userUpdate.password_hash = hashPassword(password);
     }
-    if (Object.keys(userUpdate).length > 0) {
-      await User.updateOne({ employee_id: empId }, { $set: userUpdate });
+
+    if (deactivatedAt) {
+      const session = await Employee.startSession();
+      try {
+        await session.withTransaction(async () => {
+          await oldEmp.save({ session });
+          const employeeUsers = await User.find({ employee_id: empId }).session(session);
+          for (const user of employeeUsers) {
+            user.set(userUpdate);
+            await user.save({ session });
+          }
+          await Session.deleteMany({ employee_id: empId }, { session });
+        });
+      } finally {
+        await session.endSession();
+      }
+    } else {
+      await oldEmp.save();
+      if (Object.keys(userUpdate).length > 0) {
+        await User.updateMany({ employee_id: empId }, { $set: userUpdate });
+      }
     }
 
     await logAudit(
       req.user!.username,
       req.user!.name || 'Admin',
-      'EMPLOYEE_UPDATED',
+      deactivatedAt ? 'EMPLOYEE_ARCHIVED' : 'EMPLOYEE_UPDATED',
       `Employee ${empId} (${oldEmp.name})`,
-      `Status: ${oldEmp.status}, Salary: ₹${oldEmp.monthly_salary}`,
+      `Status: ${previousStatus}, Salary: ₹${previousMonthlySalary}`,
       `Status: ${status || oldEmp.status}, Salary: ₹${mSalary}`
     );
 
-    return res.json({ success: true, message: `Employee ${empId} updated successfully.`, employee: oldEmp });
+    return res.json({
+      success: true,
+      message: deactivatedAt
+        ? `Employee ${empId} archived successfully.`
+        : `Employee ${empId} updated successfully.`,
+      employee: oldEmp,
+    });
   } catch (err: any) {
     console.error('Error updating employee:', err);
     return res.status(500).json({ error: 'Failed to update employee.' });
   }
 });
 
-// Delete Employee
+// Archive Employee
 router.delete('/employees/:id', async (req: AuthRequest, res: Response) => {
   try {
     const empId = req.params.id.toUpperCase();
@@ -478,23 +522,60 @@ router.delete('/employees/:id', async (req: AuthRequest, res: Response) => {
     if (!emp) {
       return res.status(404).json({ error: 'Employee not found.' });
     }
+    if (emp.is_active === false) {
+      return res.status(409).json({ error: 'Employee is already archived.' });
+    }
 
-    await Employee.deleteOne({ employee_id: empId });
-    await User.deleteOne({ employee_id: empId });
-    await Attendance.deleteMany({ employee_id: empId });
-    await Payroll.deleteMany({ employee_id: empId });
+    const archivedAt = new Date();
+    const archivedBy = req.user!.username;
+    const session = await Employee.startSession();
+    let archivedEmployee: typeof emp | null = null;
+    try {
+      await session.withTransaction(async () => {
+        archivedEmployee = await Employee.findOneAndUpdate(
+          { employee_id: empId, is_active: { $ne: false } },
+          {
+            $set: {
+              status: 'inactive',
+              is_active: false,
+              archived_at: archivedAt,
+              archived_by: archivedBy,
+            },
+          },
+          { session, returnDocument: 'after', runValidators: true }
+        );
+        if (!archivedEmployee) {
+          throw new EmployeeArchiveConflictError('Employee was archived by another request.');
+        }
+
+        const employeeUsers = await User.find({ employee_id: empId }).session(session);
+        for (const user of employeeUsers) {
+          user.status = 'inactive';
+          await user.save({ session });
+        }
+        await Session.deleteMany({ employee_id: empId }, { session });
+      });
+    } catch (error) {
+      if (error instanceof EmployeeArchiveConflictError) {
+        return res.status(409).json({ error: error.message });
+      }
+      throw error;
+    } finally {
+      await session.endSession();
+    }
 
     await logAudit(
       req.user!.username,
       req.user!.name || 'Admin',
-      'EMPLOYEE_DELETED',
+      'EMPLOYEE_ARCHIVED',
       `Employee ${empId} (${emp.name})`,
       `Dept: ${emp.department}`,
-      'Record permanently removed'
+      `Archived at ${archivedAt.toISOString()} by ${archivedBy}`
     );
 
-    return res.json({ success: true, message: `Employee ${empId} (${emp.name}) deleted successfully.` });
+    return res.json({ success: true, message: `Employee ${empId} (${emp.name}) archived successfully.` });
   } catch (err: any) {
+    console.error('Error archiving employee:', err);
     return res.status(500).json({ error: 'Failed to delete employee.' });
   }
 });
@@ -505,7 +586,7 @@ router.delete('/employees/:id', async (req: AuthRequest, res: Response) => {
 
 // Helper function to generate attendance roster for a specific date
 async function getAttendanceRoster(targetDate: string) {
-  const employees = await Employee.find({ status: 'active' }).sort({ employee_id: 1 });
+  const employees = await Employee.find({ status: 'active', is_active: { $ne: false } }).sort({ employee_id: 1 });
   const attendanceRecords = await Attendance.find({ date: targetDate });
 
   const attMap = new Map(attendanceRecords.map((r) => [r.employee_id, r]));

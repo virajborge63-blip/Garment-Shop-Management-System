@@ -14,7 +14,7 @@ process.env.SESSION_SECRET = 'test-session-secret-with-more-than-thirty-two-char
 const mongoose = (await import('mongoose')).default;
 await mongoose.connect(process.env.MONGODB_URI);
 
-const { Attendance, Employee, Payroll, Product, Setting, User, hashPassword } =
+const { Attendance, Employee, Payroll, Product, Session, Setting, User, hashPassword } =
   await import('../server/db.ts');
 const { default: authRoutes } = await import('../server/routes/authRoutes.ts');
 const { default: adminRoutes } = await import('../server/routes/adminRoutes.ts');
@@ -484,5 +484,123 @@ describe('API characterization', () => {
     ]);
 
     expect(responses.filter((response) => response.status === 201)).toHaveLength(1);
+  });
+
+  it('archives an employee, revokes access, and preserves historical business records', async () => {
+    const date = '2025-08-03';
+    const statusEmployeeId = `F05-STATUS-${suffix}`.toUpperCase();
+    const statusEmployee = await Employee.create({
+      employee_id: statusEmployeeId,
+      name: 'F05 Status Employee',
+      email: `f05-status-${suffix}@example.test`,
+      phone: '',
+      address: '',
+      department: 'Testing',
+      designation: 'Test Role',
+      joining_date: '2025-01-01',
+      per_day_salary: 800,
+      monthly_salary: 20800,
+      overtime_rate: 150,
+      status: 'active',
+    });
+    expect(await User.findOne({ username: `f05-status-${suffix}` })).toBeNull();
+    const statusUser = await User.create({
+      username: `f05-status-${suffix}`,
+      email: `f05-status-${suffix}@example.test`,
+      password_hash: hashPassword('Test-password-123!'),
+      role: 'EMPLOYEE',
+      employee_id: statusEmployeeId,
+      status: 'active',
+    });
+    const statusToken = `f05-session-${suffix}`;
+    await Session.create({
+      token: statusToken,
+      user_id: statusUser._id.toString(),
+      role: 'EMPLOYEE',
+      employee_id: statusEmployeeId,
+      expires_at: new Date(Date.now() + 60_000),
+    });
+
+    const deactivated = await request(app)
+      .put(`/api/admin/employees/${statusEmployeeId}`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ status: 'inactive' });
+    expect(deactivated.status).toBe(200);
+    expect((await Employee.findOne({ employee_id: statusEmployeeId }))?.is_active).toBe(false);
+    const deactivatedUser = await User.findOne({ username: `f05-status-${suffix}` })
+      .select({ employee_id: 1, status: 1 })
+      .lean();
+    expect(deactivatedUser).toMatchObject({ employee_id: statusEmployeeId, status: 'inactive' });
+    expect(await Session.exists({ token: statusToken })).toBeNull();
+
+    const payroll = await Payroll.create({
+      employee_id: employeeId,
+      month: 8,
+      year: 2025,
+      working_days: 26,
+      present_days: 1,
+      absent_days: 0,
+      leave_days: 0,
+      half_days: 0,
+      overtime_hours: 0,
+      extra_working_days: 0,
+      per_day_salary: 800,
+      basic_salary: 800,
+      extra_day_salary: 0,
+      overtime_salary: 0,
+      bonus: 0,
+      deductions: 0,
+      net_salary: 800,
+      status: 'Finalized',
+    });
+    await Attendance.create({
+      employee_id: employeeId,
+      date,
+      status: 'Present',
+      working_hours: 8,
+      overtime_hours: 0,
+    });
+    expect(await Session.exists({ token: employeeToken })).not.toBeNull();
+
+    const archived = await request(app)
+      .delete(`/api/admin/employees/${employeeId}`)
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    expect(archived.status).toBe(200);
+    const employee = await Employee.findOne({ employee_id: employeeId });
+    expect(employee?.is_active).toBe(false);
+    expect(employee?.archived_at).toBeInstanceOf(Date);
+    expect(employee?.archived_by).toBe(adminCredentials.username);
+    expect(employee?.status).toBe('inactive');
+    expect((await User.findOne({ employee_id: employeeId }))?.status).toBe('inactive');
+    expect(await Session.exists({ token: employeeToken })).toBeNull();
+
+    const archivedList = await request(app)
+      .get(`/api/admin/employees?search=${employeeId}&include_archived=true`)
+      .set('Authorization', `Bearer ${adminToken}`);
+    const defaultList = await request(app)
+      .get(`/api/admin/employees?search=${employeeId}`)
+      .set('Authorization', `Bearer ${adminToken}`);
+    const roster = await request(app)
+      .get(`/api/admin/attendance/roster?date=${date}`)
+      .set('Authorization', `Bearer ${adminToken}`);
+    const history = await request(app)
+      .get(`/api/admin/attendance?date=${date}`)
+      .set('Authorization', `Bearer ${adminToken}`);
+    const payrollHistory = await request(app)
+      .get('/api/admin/payroll?month=8&year=2025')
+      .set('Authorization', `Bearer ${adminToken}`);
+    const oldSession = await request(app)
+      .get('/api/employee/profile')
+      .set('Authorization', `Bearer ${employeeToken}`);
+
+    expect(archivedList.body.employees.map((item: { employee_id: string }) => item.employee_id)).toContain(employeeId);
+    expect(defaultList.body.employees.map((item: { employee_id: string }) => item.employee_id)).not.toContain(employeeId);
+    expect(roster.body.roster.map((item: { employee_id: string }) => item.employee_id)).not.toContain(employeeId);
+    expect(history.body.attendance.map((item: { employee_id: string }) => item.employee_id)).toContain(employeeId);
+    expect(payrollHistory.body.payroll.map((item: { employee_id: string }) => item.employee_id)).toContain(employeeId);
+    expect(await Attendance.exists({ employee_id: employeeId, date })).not.toBeNull();
+    expect(await Payroll.exists({ _id: payroll._id })).not.toBeNull();
+    expect(oldSession.status).toBe(401);
   });
 });

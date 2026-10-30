@@ -142,7 +142,7 @@ export const EmployeeManagement: React.FC = () => {
         headers: { Authorization: `Bearer ${token}` }
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to delete employee');
+      if (!res.ok) throw new Error(data.error || 'Failed to archive employee');
 
       setFeedback({ type: 'success', message: data.message });
       setIsDeleteModalOpen(false);
@@ -398,7 +398,7 @@ export const EmployeeManagement: React.FC = () => {
                             setSelectedEmp(emp);
                             setIsDeleteModalOpen(true);
                           }}
-                          title="Delete Employee"
+                          title="Archive Employee"
                           className="p-1.5 rounded-lg text-slate-500 hover:text-rose-600 hover:bg-rose-50 transition-colors"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
@@ -828,19 +828,19 @@ export const EmployeeManagement: React.FC = () => {
         </div>
       )}
 
-      {/* DELETE CONFIRMATION MODAL */}
+      {/* ARCHIVE CONFIRMATION MODAL */}
       {isDeleteModalOpen && selectedEmp && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-rose-200 text-center">
             <div className="w-12 h-12 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto mb-3">
               <Trash2 className="w-6 h-6" />
             </div>
-            <h3 className="text-base font-bold text-slate-900">Delete Employee Confirmation</h3>
+            <h3 className="text-base font-bold text-slate-900">Archive Employee Confirmation</h3>
             <p className="text-xs text-slate-600 mt-2">
-              Are you sure you want to permanently delete <strong className="text-slate-900">{selectedEmp.name} ({selectedEmp.employee_id})</strong>?
+              Are you sure you want to archive <strong className="text-slate-900">{selectedEmp.name} ({selectedEmp.employee_id})</strong>?
             </p>
             <p className="text-[11px] text-rose-600 mt-1 font-medium bg-rose-50 p-2 rounded-lg border border-rose-200">
-              Warning: All attendance records, user credentials, and payroll history associated with this employee will be deleted.
+              The employee will be hidden from active lists, their login will be disabled, and historical attendance and payroll records will be retained.
             </p>
 
             <div className="mt-6 flex justify-center gap-3">
@@ -854,7 +854,7 @@ export const EmployeeManagement: React.FC = () => {
                 onClick={handleDeleteConfirm}
                 className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-xs font-bold shadow-md shadow-rose-600/30"
               >
-                Yes, Delete Record
+                Yes, Archive Employee
               </button>
             </div>
           </div>

@@ -13,6 +13,9 @@ export interface IEmployee {
   monthly_salary: number;
   overtime_rate: number;
   status: 'active' | 'inactive';
+  is_active: boolean;
+  archived_at?: Date;
+  archived_by?: string;
   avatar_url?: string;
   created_at: Date;
 }
@@ -38,6 +41,9 @@ const EmployeeSchema = new Schema<IEmployee>(
     monthly_salary: { type: Number, required: true, default: 20800 },
     overtime_rate: { type: Number, required: true, default: 150 },
     status: { type: String, enum: ['active', 'inactive'], default: 'active' },
+    is_active: { type: Boolean, default: true, index: true },
+    archived_at: { type: Date },
+    archived_by: { type: String },
     avatar_url: { type: String, default: '' },
     created_at: { type: Date, default: Date.now },
   },
