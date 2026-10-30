@@ -14,7 +14,7 @@ process.env.SESSION_SECRET = 'test-session-secret-with-more-than-thirty-two-char
 const mongoose = (await import('mongoose')).default;
 await mongoose.connect(process.env.MONGODB_URI);
 
-const { Attendance, Employee, Payroll, Product, Session, Setting, User, hashPassword } =
+const { Attendance, Employee, Payroll, Product, Sale, Session, Setting, User, hashPassword } =
   await import('../server/db.ts');
 const { default: authRoutes } = await import('../server/routes/authRoutes.ts');
 const { default: adminRoutes } = await import('../server/routes/adminRoutes.ts');
@@ -427,6 +427,7 @@ describe('API characterization', () => {
     const response = await request(app)
       .post('/api/shop/sales')
       .set('Authorization', `Bearer ${adminToken}`)
+      .set('Idempotency-Key', `f04-catalog-${suffix}`)
       .send({
         items: [{ product_id: product._id.toString(), quantity: 1, unit_price: 1 }],
         payment_method: 'Cash',
@@ -435,6 +436,176 @@ describe('API characterization', () => {
     expect(response.status).toBe(201);
     expect(response.body.sale.total_amount).toBe(100);
     expect((await Product.findById(product._id))?.stock_quantity).toBe(1);
+  });
+
+  it('replays a sale safely for the same idempotency key', async () => {
+    const product = await Product.create({
+      name: 'Idempotency Test Garment',
+      sku: `IDEMPOTENCY-${suffix}`,
+      category: 'Test',
+      size: 'M',
+      color: 'Blue',
+      fabric: 'Cotton',
+      cost_price: 40,
+      selling_price: 100,
+      stock_quantity: 2,
+      min_stock_alert: 1,
+      status: 'active',
+    });
+    const idempotencyKey = `f04-retry-${suffix}`;
+    const payload = {
+      items: [{ product_id: product._id.toString(), quantity: 1 }],
+      payment_method: 'Cash',
+    };
+
+    const [first, retry] = await Promise.all([
+      request(app)
+        .post('/api/shop/sales')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('Idempotency-Key', idempotencyKey)
+        .send(payload),
+      request(app)
+        .post('/api/shop/sales')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('Idempotency-Key', idempotencyKey)
+        .send(payload),
+    ]);
+    const keyReuse = await request(app)
+      .post('/api/shop/sales')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .set('Idempotency-Key', idempotencyKey)
+      .send({ ...payload, items: [{ product_id: product._id.toString(), quantity: 2 }] });
+
+    expect(first.status).toBe(201);
+    expect(retry.status).toBe(201);
+    expect(retry.body.sale.bill_number).toBe(first.body.sale.bill_number);
+    expect(keyReuse.status).toBe(409);
+    expect(await Sale.countDocuments({ idempotency_key: idempotencyKey })).toBe(1);
+    expect((await Product.findById(product._id))?.stock_quantity).toBe(1);
+  });
+
+  it('merges duplicate cart lines before decrementing stock', async () => {
+    const product = await Product.create({
+      name: 'Duplicate Line Test Garment',
+      sku: `DUPLICATE-${suffix}`,
+      category: 'Test',
+      size: 'M',
+      color: 'Blue',
+      fabric: 'Cotton',
+      cost_price: 40,
+      selling_price: 100,
+      stock_quantity: 2,
+      min_stock_alert: 1,
+      status: 'active',
+    });
+
+    const response = await request(app)
+      .post('/api/shop/sales')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .set('Idempotency-Key', `f04-duplicate-${suffix}`)
+      .send({
+        items: [
+          { product_id: product._id.toString(), quantity: 1 },
+          { product_id: product._id.toString(), quantity: 1 },
+        ],
+        payment_method: 'Cash',
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body.sale.items).toHaveLength(1);
+    expect(response.body.sale.items[0].quantity).toBe(2);
+    expect((await Product.findById(product._id))?.stock_quantity).toBe(0);
+  });
+
+  it('rolls back earlier stock decrements if any cart item cannot be sold', async () => {
+    const products = await Product.create([
+      {
+        name: 'Rollback Test Available Garment',
+        sku: `ROLLBACK-AVAILABLE-${suffix}`,
+        category: 'Test',
+        size: 'M',
+        color: 'Blue',
+        fabric: 'Cotton',
+        cost_price: 40,
+        selling_price: 100,
+        stock_quantity: 1,
+        min_stock_alert: 1,
+        status: 'active',
+      },
+      {
+        name: 'Rollback Test Empty Garment',
+        sku: `ROLLBACK-EMPTY-${suffix}`,
+        category: 'Test',
+        size: 'M',
+        color: 'Blue',
+        fabric: 'Cotton',
+        cost_price: 40,
+        selling_price: 100,
+        stock_quantity: 0,
+        min_stock_alert: 1,
+        status: 'active',
+      },
+    ]);
+    const idempotencyKey = `f04-rollback-${suffix}`;
+
+    const response = await request(app)
+      .post('/api/shop/sales')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .set('Idempotency-Key', idempotencyKey)
+      .send({
+        items: products.map((product) => ({ product_id: product._id.toString(), quantity: 1 })),
+        payment_method: 'Cash',
+      });
+
+    expect(response.status).toBe(400);
+    expect((await Product.findById(products[0]._id))?.stock_quantity).toBe(1);
+    expect((await Product.findById(products[1]._id))?.stock_quantity).toBe(0);
+    expect(await Sale.countDocuments({ idempotency_key: idempotencyKey })).toBe(0);
+  });
+
+  it('generates unique invoice numbers for concurrent distinct sales', async () => {
+    const products = await Product.create([
+      {
+        name: 'Concurrent Invoice Garment A',
+        sku: `CONCURRENT-A-${suffix}`,
+        category: 'Test',
+        size: 'M',
+        color: 'Blue',
+        fabric: 'Cotton',
+        cost_price: 40,
+        selling_price: 100,
+        stock_quantity: 1,
+        min_stock_alert: 1,
+        status: 'active',
+      },
+      {
+        name: 'Concurrent Invoice Garment B',
+        sku: `CONCURRENT-B-${suffix}`,
+        category: 'Test',
+        size: 'M',
+        color: 'Blue',
+        fabric: 'Cotton',
+        cost_price: 40,
+        selling_price: 100,
+        stock_quantity: 1,
+        min_stock_alert: 1,
+        status: 'active',
+      },
+    ]);
+
+    const responses = await Promise.all(products.map((product, index) =>
+      request(app)
+        .post('/api/shop/sales')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('Idempotency-Key', `f04-invoice-${index}-${suffix}`)
+        .send({
+          items: [{ product_id: product._id.toString(), quantity: 1 }],
+          payment_method: 'Cash',
+        })
+    ));
+
+    expect(responses.map((response) => response.status)).toEqual([201, 201]);
+    expect(new Set(responses.map((response) => response.body.sale.bill_number)).size).toBe(2);
   });
 
   it.skip('F-02: returns unmarked attendance when no record exists', async () => {
@@ -459,7 +630,7 @@ describe('API characterization', () => {
     expect((await Payroll.findById(payroll?._id))?.status).toBe('Paid');
   });
 
-  it.skip('F-04: only one concurrent sale succeeds for the final stock unit', async () => {
+  it('F-04: only one concurrent sale succeeds for the final stock unit', async () => {
     const product = await Product.create({
       name: 'Last Unit Test Garment',
       sku: `LAST-${suffix}`,
@@ -479,8 +650,8 @@ describe('API characterization', () => {
     };
 
     const responses = await Promise.all([
-      request(app).post('/api/shop/sales').set('Authorization', `Bearer ${adminToken}`).send(payload),
-      request(app).post('/api/shop/sales').set('Authorization', `Bearer ${adminToken}`).send(payload),
+      request(app).post('/api/shop/sales').set('Authorization', `Bearer ${adminToken}`).set('Idempotency-Key', `f04-last-a-${suffix}`).send(payload),
+      request(app).post('/api/shop/sales').set('Authorization', `Bearer ${adminToken}`).set('Idempotency-Key', `f04-last-b-${suffix}`).send(payload),
     ]);
 
     expect(responses.filter((response) => response.status === 201)).toHaveLength(1);

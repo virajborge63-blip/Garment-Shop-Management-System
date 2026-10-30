@@ -23,6 +23,8 @@ export interface ISale {
   cashier_name: string;
   status: 'Completed' | 'Refunded' | 'Cancelled';
   date: Date;
+  idempotency_key: string;
+  idempotency_hash: string;
 }
 
 const SaleItemSchema = new Schema<ISaleItem>(
@@ -52,6 +54,8 @@ const SaleSchema = new Schema<ISale>(
     cashier_name: { type: String, default: 'Store Billing' },
     status: { type: String, enum: ['Completed', 'Refunded', 'Cancelled'], default: 'Completed' },
     date: { type: Date, default: Date.now },
+    idempotency_key: { type: String, required: true },
+    idempotency_hash: { type: String, required: true },
   },
   {
     timestamps: false,
@@ -72,6 +76,8 @@ const SaleSchema = new Schema<ISale>(
     },
   }
 );
+
+SaleSchema.index({ idempotency_key: 1 }, { unique: true, sparse: true });
 
 export const Sale: Model<ISale> = mongoose.models.Sale
   ? (mongoose.models.Sale as Model<ISale>)

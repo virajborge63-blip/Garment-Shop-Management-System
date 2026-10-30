@@ -1,15 +1,36 @@
 import { Router, Response } from 'express';
+import { createHash } from 'node:crypto';
 import {
   Category,
   Product,
   Customer,
   Supplier,
   Sale,
+  InvoiceCounter,
   logAudit,
 } from '../db.ts';
 import { authenticateToken, requireAdmin, AuthRequest } from '../auth.ts';
 
 const router = Router();
+
+class SaleRequestError extends Error {
+  constructor(message: string, readonly statusCode = 400) {
+    super(message);
+  }
+}
+
+function isDuplicateKeyError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    error.code === 11000
+  );
+}
+
+function getIdempotencyHash(payload: unknown): string {
+  return createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+}
 
 // Apply auth + strict admin check to all shop management routes
 router.use(authenticateToken);
@@ -391,149 +412,279 @@ router.get('/sales', async (req: AuthRequest, res: Response) => {
 
 router.post('/sales', async (req: AuthRequest, res: Response) => {
   try {
+    if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+      return res.status(400).json({ error: 'Request body must be an object.' });
+    }
+
     const {
       customer_name, customer_phone, items,
       discount, tax, payment_method, cashier_name
     } = req.body;
-
+    const idempotencyKey = req.get('Idempotency-Key');
+    if (!idempotencyKey || !/^[A-Za-z0-9._:-]{8,128}$/.test(idempotencyKey)) {
+      return res.status(400).json({ error: 'A valid Idempotency-Key header is required.' });
+    }
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: 'At least one item is required to generate a bill.' });
     }
 
-    // Step 1: Server-side validation of items, stock levels, and authorized prices
-    let subtotal = 0;
-    const validatedItems: Array<{
+    const idempotencyHash = getIdempotencyHash({
+      customer_name,
+      customer_phone,
+      items,
+      discount,
+      tax,
+      payment_method,
+    });
+
+    await Promise.all([Sale.init(), InvoiceCounter.init()]);
+    const existingSale = await Sale.findOne({ idempotency_key: idempotencyKey });
+    if (existingSale) {
+      if (existingSale.idempotency_hash !== idempotencyHash) {
+        return res.status(409).json({ error: 'Idempotency key was already used for a different sale.' });
+      }
+      return res.status(201).json({
+        success: true,
+        message: `Invoice #${existingSale.bill_number} generated successfully.`,
+        sale: existingSale,
+      });
+    }
+
+    if (customer_name !== undefined && typeof customer_name !== 'string') {
+      return res.status(400).json({ error: 'Customer name must be a string.' });
+    }
+    if (customer_phone !== undefined && typeof customer_phone !== 'string') {
+      return res.status(400).json({ error: 'Customer phone must be a string.' });
+    }
+    const customerName = customer_name?.trim() || 'Walk-in Customer';
+    const customerPhone = customer_phone?.trim() || '';
+    const paymentMethods = ['Cash', 'UPI', 'Card', 'Net Banking'];
+    const paymentMethod = payment_method === undefined ? 'Cash' : payment_method;
+    if (typeof paymentMethod !== 'string' || !paymentMethods.includes(paymentMethod)) {
+      return res.status(400).json({ error: 'Payment method is invalid.' });
+    }
+
+    const mergedItems = new Map<string, {
       product_id: string;
       name: string;
-      sku: string;
       size: string;
       quantity: number;
       unit_price: number;
-      total: number;
-    }> = [];
-
-    for (const item of items) {
-      const qty = parseInt(String(item.quantity), 10);
-      if (isNaN(qty) || qty <= 0) {
-        return res.status(400).json({
-          error: `Invalid quantity for item "${item.name || 'Item'}". Quantity must be a positive integer greater than zero.`
-        });
+    }>();
+    for (const value of items as unknown[]) {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return res.status(400).json({ error: 'Each sale item must be an object.' });
+      }
+      const item = value as Record<string, unknown>;
+      const quantity = Number(item.quantity);
+      if (!Number.isSafeInteger(quantity) || quantity <= 0) {
+        return res.status(400).json({ error: 'Sale item quantities must be positive integers.' });
+      }
+      if (item.product_id !== undefined && item.product_id !== null && typeof item.product_id !== 'string') {
+        return res.status(400).json({ error: 'Product IDs must be strings.' });
       }
 
-      if (item.product_id) {
-        const prod = await Product.findById(item.product_id);
-        if (!prod) {
-          return res.status(400).json({ error: `Product with ID ${item.product_id} was not found in store catalog.` });
-        }
-
-        if (prod.status === 'discontinued') {
-          return res.status(400).json({ error: `Product "${prod.name}" (${prod.sku}) has been discontinued and cannot be sold.` });
-        }
-
-        if (prod.stock_quantity < qty) {
-          return res.status(400).json({
-            error: `Insufficient stock for "${prod.name}" (${prod.sku}). Available stock: ${prod.stock_quantity}, requested: ${qty}.`
-          });
-        }
-
-        // Server is the single source of truth for retail price
-        const verifiedPrice = prod.selling_price;
-        const itemTotal = qty * verifiedPrice;
-        subtotal += itemTotal;
-
-        validatedItems.push({
-          product_id: prod._id.toString(),
-          name: prod.name,
-          sku: prod.sku,
-          size: prod.size || item.size || 'Free Size',
-          quantity: qty,
-          unit_price: verifiedPrice,
-          total: itemTotal,
-        });
-      } else {
-        // Fallback for custom / miscellaneous walk-in items without barcode/SKU
-        const customPrice = Math.max(0, parseFloat(item.unit_price) || 0);
-        const itemTotal = qty * customPrice;
-        subtotal += itemTotal;
-
-        validatedItems.push({
-          product_id: '',
-          name: (item.name || 'Garment Item').trim(),
-          sku: 'MISC-ITEM',
-          size: item.size || 'Free Size',
-          quantity: qty,
-          unit_price: customPrice,
-          total: itemTotal,
-        });
+      const productId = typeof item.product_id === 'string' ? item.product_id.trim() : '';
+      if (productId && !/^[a-f0-9]{24}$/i.test(productId)) {
+        return res.status(400).json({ error: 'Product ID is invalid.' });
       }
+      const name = typeof item.name === 'string' && item.name.trim()
+        ? item.name.trim()
+        : 'Garment Item';
+      const size = typeof item.size === 'string' && item.size.trim()
+        ? item.size.trim()
+        : 'Free Size';
+      const unitPrice = item.unit_price === undefined ? 0 : Number(item.unit_price);
+      if (!productId && (!Number.isFinite(unitPrice) || unitPrice < 0)) {
+        return res.status(400).json({ error: 'Custom item prices must be finite and non-negative.' });
+      }
+
+      const key = productId
+        ? `product:${productId.toLowerCase()}`
+        : `custom:${name.toLowerCase()}:${size.toLowerCase()}:${unitPrice}`;
+      const existing = mergedItems.get(key);
+      const combinedQuantity = (existing?.quantity || 0) + quantity;
+      if (!Number.isSafeInteger(combinedQuantity)) {
+        return res.status(400).json({ error: 'Combined sale quantity is too large.' });
+      }
+      mergedItems.set(key, {
+        product_id: productId,
+        name,
+        size,
+        quantity: combinedQuantity,
+        unit_price: unitPrice,
+      });
     }
 
-    // Step 2: Atomically decrement stock for validated catalog products
-    for (const item of validatedItems) {
-      if (item.product_id) {
-        await Product.findOneAndUpdate(
-          { _id: item.product_id, stock_quantity: { $gte: item.quantity } },
-          { $inc: { stock_quantity: -item.quantity } }
-        );
-      }
+    const rawDiscount = discount === undefined ? 0 : Number(discount);
+    const taxAmount = tax === undefined ? 0 : Number(tax);
+    if (!Number.isFinite(rawDiscount) || rawDiscount < 0 || !Number.isFinite(taxAmount) || taxAmount < 0) {
+      return res.status(400).json({ error: 'Discount and tax must be finite non-negative amounts.' });
     }
 
-    // Step 3: Validate discount and taxes
-    const rawDiscount = parseFloat(discount) || 0;
-    const disc = Math.min(Math.max(0, rawDiscount), subtotal); // Discount cannot exceed subtotal
-    const taxAmt = Math.max(0, parseFloat(tax) || 0);
-    const totalAmount = Math.max(0, Math.round((subtotal - disc + taxAmt) * 100) / 100);
-    const cashier = cashier_name || req.user!.name || req.user!.username || 'Billing Desk';
-
-    // Step 4: Generate unique Bill Number: INV-YYYYMMDD-XXXX
-    const todayStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-    const countToday = await Sale.countDocuments({
-      date: { $gte: new Date(new Date().setHours(0, 0, 0, 0)) },
-    });
-    const billNumber = `INV-${todayStr}-${String(countToday + 1).padStart(4, '0')}`;
-
-    const sale = await Sale.create({
-      bill_number: billNumber,
-      customer_name: customer_name ? customer_name.trim() : 'Walk-in Customer',
-      customer_phone: customer_phone ? customer_phone.trim() : '',
-      items: validatedItems,
-      subtotal,
-      discount: disc,
-      tax: taxAmt,
-      total_amount: totalAmount,
-      payment_method: payment_method || 'Cash',
-      cashier_name: cashier,
-      status: 'Completed',
-      date: new Date(),
-    });
-
-    // Update customer total purchases if phone is provided
-    if (customer_phone && customer_phone.trim()) {
-      await Customer.findOneAndUpdate(
-        { phone: customer_phone.trim() },
-        {
-          $inc: { total_purchases: totalAmount },
-          $setOnInsert: { name: customer_name || 'Walk-in Customer', created_at: new Date() },
-        },
+    const today = new Date();
+    const dateKey = today.toISOString().slice(0, 10);
+    const invoicePrefix = `INV-${dateKey.replace(/-/g, '')}-`;
+    const oldInvoices = await Sale.find({ bill_number: new RegExp(`^${invoicePrefix}`) })
+      .select({ bill_number: 1 })
+      .lean();
+    const initialSequence = oldInvoices.reduce((max, sale) => {
+      const sequence = Number(sale.bill_number.slice(invoicePrefix.length));
+      return Number.isSafeInteger(sequence) ? Math.max(max, sequence) : max;
+    }, 0);
+    try {
+      await InvoiceCounter.updateOne(
+        { key: dateKey },
+        { $setOnInsert: { value: initialSequence } },
         { upsert: true }
       );
+    } catch (error) {
+      if (!isDuplicateKeyError(error) || !(await InvoiceCounter.exists({ key: dateKey }))) {
+        throw error;
+      }
+    }
+
+    const session = await Sale.startSession();
+    let sale: InstanceType<typeof Sale> | null = null;
+    const cashier = cashier_name || req.user!.name || req.user!.username || 'Billing Desk';
+    try {
+      await session.withTransaction(async () => {
+        let subtotal = 0;
+        const validatedItems = [];
+
+        for (const item of mergedItems.values()) {
+          if (item.product_id) {
+            const product = await Product.findById(item.product_id).session(session);
+            if (!product) {
+              throw new SaleRequestError(`Product with ID ${item.product_id} was not found in store catalog.`);
+            }
+            if (product.status === 'discontinued') {
+              throw new SaleRequestError(`Product "${product.name}" (${product.sku}) has been discontinued and cannot be sold.`);
+            }
+            const updatedProduct = await Product.findOneAndUpdate(
+              { _id: product._id, status: { $ne: 'discontinued' }, stock_quantity: { $gte: item.quantity } },
+              { $inc: { stock_quantity: -item.quantity } },
+              { session, returnDocument: 'after' }
+            );
+            if (!updatedProduct) {
+              throw new SaleRequestError(
+                `Insufficient stock for "${product.name}" (${product.sku}). Requested: ${item.quantity}.`
+              );
+            }
+
+            const verifiedPrice = product.selling_price;
+            const itemTotal = item.quantity * verifiedPrice;
+            subtotal += itemTotal;
+            validatedItems.push({
+              product_id: product._id.toString(),
+              name: product.name,
+              sku: product.sku,
+              size: product.size || item.size,
+              quantity: item.quantity,
+              unit_price: verifiedPrice,
+              total: itemTotal,
+            });
+          } else {
+            const itemTotal = item.quantity * item.unit_price;
+            subtotal += itemTotal;
+            validatedItems.push({
+              product_id: '',
+              name: item.name,
+              sku: 'MISC-ITEM',
+              size: item.size,
+              quantity: item.quantity,
+              unit_price: item.unit_price,
+              total: itemTotal,
+            });
+          }
+        }
+
+        const appliedDiscount = Math.min(rawDiscount, subtotal);
+        const totalAmount = Math.max(0, Math.round((subtotal - appliedDiscount + taxAmount) * 100) / 100);
+        const counter = await InvoiceCounter.findOneAndUpdate(
+          { key: dateKey },
+          { $inc: { value: 1 } },
+          { session, returnDocument: 'after', runValidators: true }
+        );
+        if (!counter) {
+          throw new Error('Invoice sequence counter was not available.');
+        }
+        const billNumber = `${invoicePrefix}${String(counter.value).padStart(4, '0')}`;
+
+        sale = new Sale({
+          bill_number: billNumber,
+          idempotency_key: idempotencyKey,
+          idempotency_hash: idempotencyHash,
+          customer_name: customerName,
+          customer_phone: customerPhone,
+          items: validatedItems,
+          subtotal,
+          discount: appliedDiscount,
+          tax: taxAmount,
+          total_amount: totalAmount,
+          payment_method: paymentMethod,
+          cashier_name: cashier,
+          status: 'Completed',
+          date: today,
+        });
+        await sale.save({ session });
+
+        if (customerPhone) {
+          await Customer.findOneAndUpdate(
+            { phone: customerPhone },
+            {
+              $inc: { total_purchases: totalAmount },
+              $setOnInsert: { name: customerName, created_at: new Date() },
+            },
+            { upsert: true, session, returnDocument: 'after', runValidators: true }
+          );
+        }
+      });
+    } catch (error) {
+      if (error instanceof SaleRequestError) {
+        return res.status(error.statusCode).json({ error: error.message });
+      }
+      if (isDuplicateKeyError(error)) {
+        const duplicateSale = await Sale.findOne({ idempotency_key: idempotencyKey });
+        if (duplicateSale) {
+          if (duplicateSale.idempotency_hash !== idempotencyHash) {
+            return res.status(409).json({ error: 'Idempotency key was already used for a different sale.' });
+          }
+          return res.status(201).json({
+            success: true,
+            message: `Invoice #${duplicateSale.bill_number} generated successfully.`,
+            sale: duplicateSale,
+          });
+        }
+        return res.status(409).json({ error: 'Invoice sequence conflict. Retry the sale with the same idempotency key.' });
+      }
+      throw error;
+    } finally {
+      await session.endSession();
+    }
+
+    if (!sale) {
+      throw new Error('Sale transaction completed without creating an invoice.');
     }
 
     await logAudit(
       req.user!.username,
       cashier,
       'BILL_GENERATED',
-      `Bill #${billNumber}`,
+      `Bill #${sale.bill_number}`,
       '',
-      `Total: ₹${totalAmount} (${payment_method || 'Cash'}) to ${customer_name || 'Walk-in Customer'}`
+      `Total: ₹${sale.total_amount} (${paymentMethod}) to ${customerName}`
     );
 
     return res.status(201).json({
       success: true,
-      message: `Invoice #${billNumber} generated successfully.`,
+      message: `Invoice #${sale.bill_number} generated successfully.`,
       sale,
     });
   } catch (err: any) {
+    if (err instanceof SaleRequestError) {
+      return res.status(err.statusCode).json({ error: err.message });
+    }
     console.error('POS billing error:', err);
     return res.status(500).json({ error: 'Failed to process sale invoice.' });
   }

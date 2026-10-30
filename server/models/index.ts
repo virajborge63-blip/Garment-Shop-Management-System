@@ -10,3 +10,4 @@ export * from './Product.ts';
 export * from './Customer.ts';
 export * from './Supplier.ts';
 export * from './Sale.ts';
+export * from './InvoiceCounter.ts';

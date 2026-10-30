@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   ShoppingBag,
   Package,
@@ -88,6 +88,7 @@ export const InventoryBillingManagement: React.FC = () => {
   const [discountAmount, setDiscountAmount] = useState<number>(0);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [lastInvoice, setLastInvoice] = useState<SaleRecord | null>(null);
+  const checkoutAttemptRef = useRef<{ fingerprint: string; key: string } | null>(null);
 
   // Modals
   const [showProductModal, setShowProductModal] = useState(false);
@@ -267,19 +268,28 @@ export const InventoryBillingManagement: React.FC = () => {
       alert('Cart is empty. Please select garments to bill.');
       return;
     }
+    const checkoutPayload = {
+      customer_name: customerName || 'Walk-in Customer',
+      customer_phone: customerPhone,
+      items: cart,
+      discount: discountAmount,
+      tax: 0,
+      payment_method: paymentMethod,
+    };
+    const fingerprint = JSON.stringify(checkoutPayload);
+    if (checkoutAttemptRef.current?.fingerprint !== fingerprint) {
+      checkoutAttemptRef.current = { fingerprint, key: crypto.randomUUID() };
+    }
+
     try {
       setIsLoading(true);
       const res = await fetch('/api/shop/sales', {
         method: 'POST',
-        headers: authHeaders,
-        body: JSON.stringify({
-          customer_name: customerName || 'Walk-in Customer',
-          customer_phone: customerPhone,
-          items: cart,
-          discount: discountAmount,
-          tax: 0,
-          payment_method: paymentMethod,
-        }),
+        headers: {
+          ...authHeaders,
+          'Idempotency-Key': checkoutAttemptRef.current.key,
+        },
+        body: JSON.stringify(checkoutPayload),
       });
 
       const data = await res.json();
@@ -291,6 +301,7 @@ export const InventoryBillingManagement: React.FC = () => {
       setCustomerName('');
       setCustomerPhone('');
       setDiscountAmount(0);
+      checkoutAttemptRef.current = null;
 
       // Refresh inventory & sales
       fetchProducts();
