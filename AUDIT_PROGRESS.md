@@ -25,7 +25,7 @@ pattern.
 | Finding | Status | Commit |
 |---|---|---|
 | F-06 | Done - log-matched | `cee5249` |
-| F-07 | Pending | - |
+| F-07 | Done - log-matched | `fedf127` |
 | F-11 | Pending | - |
 | F-17 | Pending | - |
 | F-12 | Pending owner decision; proposal only | - |
