@@ -5,7 +5,7 @@ import path from 'path';
 import mongoose from 'mongoose';
 import { createServer as createViteServer } from 'vite';
 import { initDatabase } from './server/db.ts';
-import { isProduction } from './server/environment.ts';
+import { getTrustProxyHops, isProduction } from './server/environment.ts';
 import { apiRateLimiter } from './server/middleware/rateLimiter.ts';
 import authRoutes from './server/routes/authRoutes.ts';
 import adminRoutes from './server/routes/adminRoutes.ts';
@@ -58,6 +58,7 @@ async function startServer() {
   const httpServer = http.createServer(app);
   const PORT = Number(process.env.PORT) || 3000;
   const production = isProduction();
+  app.set('trust proxy', getTrustProxyHops());
 
   // Basic security & parsing
   app.disable('x-powered-by');

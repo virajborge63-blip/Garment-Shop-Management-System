@@ -92,6 +92,8 @@ npm start
 
 Production requires `MONGODB_URI` and a `SESSION_SECRET` of at least 32 characters. The server exits with an actionable error if the database is unavailable; it does not switch to temporary storage. The hosting platform must provide `PORT`; the server binds to `0.0.0.0`. Set `NODE_ENV=production`.
 
+The server does not trust forwarded client IP headers by default. If deployed behind a fixed, known proxy chain, set `TRUST_PROXY_HOPS` to the exact number of trusted proxy hops so Express can derive `req.ip`; it must be a non-negative integer. Leave it unset (equivalent to `0`) when connecting directly, and do not trust a proxy hop count unless the deployment topology is controlled.
+
 For a Node.js host, use `npm run build` as the build command and `npm start` as the start command, with the environment variables above configured in the host's secret settings. Provision the first owner using the setup CLI against the same persistent database before giving client users access. No hosting-provider-specific deployment manifest is present in this repository, so provider-specific networking and health-check setup must be completed in that provider's dashboard.
 
 ---

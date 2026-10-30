@@ -41,11 +41,7 @@ export function createRateLimiter(options: RateLimitOptions) {
   }
 
   return (req: Request, res: Response, next: NextFunction) => {
-    // Determine client IP address
-    const forwarded = req.headers['x-forwarded-for'];
-    const ip = (typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : '') ||
-               req.socket?.remoteAddress ||
-               'unknown_client';
+    const ip = req.ip || req.socket?.remoteAddress || 'unknown_client';
 
     const now = Date.now();
     let record = hits.get(ip);
