@@ -48,7 +48,7 @@ pattern.
 | F-20 | Done - remember-me selects local/session storage; API consumers read both; logout and invalid-session cleanup clear both; tests/build passed | `21b7a24` |
 | F-22 | Done - replaced shell-specific cleanup with a Node script; `npm run clean` verified on Windows and build passed afterward | `2003b2f` |
 | F-23 | Done - documented startup retries, exact unauthenticated health payloads/statuses, and deployment health-check path | `151c602` |
-| F-19 | Pending | - |
+| F-19 | No safe fix - four low advisories remain; only offered remediation is a breaking major downgrade; dependency files unchanged | - |
 | F-21 | Pending; proposal only | - |
 | F-24 | No code action; remind owner to rotate credentials if `.env` was shared | - |
 
@@ -138,6 +138,11 @@ safety notes below.
 - Severity/area/location: Low; H; `package-lock.json` Workbox/Vite PWA chain.
 - Problem/evidence: `npm audit --omit=dev` was reported to show four low
   `deepmerge` prototype-pollution advisories.
+- Recheck result: `deepmerge@4.3.1` is the latest registry version and is
+  included in the advisory range (`>=4.2.0 <=4.3.1`). npm offers only a major
+  downgrade of `vite-plugin-pwa` to `0.2.1`; its dry-run could not complete
+  because the environment blocked a package fetch (`EALLOWREMOTE`). No
+  dependency files were changed; do not force the downgrade.
 - Fix/acceptance: Check for a compatible override or upstream update. Never use
   `--force` or a breaking forced downgrade. If no safe option exists, document
   the evidence and leave dependencies unchanged. Commit any safe fix separately
