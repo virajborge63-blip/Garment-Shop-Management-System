@@ -168,6 +168,28 @@ async function startServer() {
     console.log(`[Server] Garment Shop Management System (MongoDB) listening at http://0.0.0.0:${PORT} (${production ? 'production' : 'development'})`);
   });
 
+  const shutdown = async (signal: string) => {
+    console.log(`[Server] Received ${signal}. Initiating graceful shutdown...`);
+    httpServer.close(async () => {
+      console.log('[Server] HTTP server closed.');
+      try {
+        await mongoose.disconnect();
+        console.log('[Database] MongoDB connection closed.');
+      } catch (err) {
+        console.error('[Database] Error closing MongoDB connection:', err);
+      }
+      process.exit(0);
+    });
+
+    setTimeout(() => {
+      console.error('[Server] Graceful shutdown timed out. Forcing process exit.');
+      process.exit(1);
+    }, 10000).unref();
+  };
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+
   void initializeDatabaseWithRetry();
 }
 

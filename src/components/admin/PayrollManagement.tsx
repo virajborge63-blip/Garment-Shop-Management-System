@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { PayrollRecord, SalarySlipData } from '../../types.ts';
 import { getStoredAuthToken } from '../../utils/authToken.ts';
+import { getBusinessDateParts } from '../../../shared/businessDate.ts';
 import { SalarySlipModal } from '../common/SalarySlipModal.tsx';
 import { 
   FileSpreadsheet, Calculator, CheckCircle2, 
@@ -18,8 +19,8 @@ export const PayrollManagement: React.FC = () => {
   const [payrolls, setPayrolls] = useState<PayrollRecord[]>([]);
   const [payrollWarnings, setPayrollWarnings] = useState<PayrollWarning[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [selectedMonth, setSelectedMonth] = useState<number>(8); // Defaults to August or current
-  const [selectedYear, setSelectedYear] = useState<number>(2026);
+  const [selectedMonth, setSelectedMonth] = useState<number>(() => getBusinessDateParts().month);
+  const [selectedYear, setSelectedYear] = useState<number>(() => getBusinessDateParts().year);
   const [isGenerating, setIsGenerating] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 

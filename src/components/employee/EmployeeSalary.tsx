@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { getStoredAuthToken } from '../../utils/authToken.ts';
+import { getBusinessDateParts } from '../../../shared/businessDate.ts';
 import { DollarSign, Calculator, Info, CheckCircle2, Shield, Calendar } from 'lucide-react';
 
 export const EmployeeSalary: React.FC = () => {
   const [salaryData, setSalaryData] = useState<any>(null);
-  const [selectedMonth, setSelectedMonth] = useState<number>(8); // Defaults to August
-  const [selectedYear, setSelectedYear] = useState<number>(2026);
+  const [selectedMonth, setSelectedMonth] = useState<number>(() => getBusinessDateParts().month);
+  const [selectedYear, setSelectedYear] = useState<number>(() => getBusinessDateParts().year);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {

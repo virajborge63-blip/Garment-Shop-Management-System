@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { getStoredAuthToken } from '../../utils/authToken.ts';
+import { getBusinessDateParts } from '../../../shared/businessDate.ts';
 import { Printer, Download, Filter, BarChart3, Clock, DollarSign, Calendar } from 'lucide-react';
 
 export const ReportsManagement: React.FC = () => {
   const [reportType, setReportType] = useState<'attendance' | 'salary' | 'overtime'>('attendance');
-  const [selectedMonth, setSelectedMonth] = useState<number>(8);
-  const [selectedYear, setSelectedYear] = useState<number>(2026);
+  const [selectedMonth, setSelectedMonth] = useState<number>(() => getBusinessDateParts().month);
+  const [selectedYear, setSelectedYear] = useState<number>(() => getBusinessDateParts().year);
   const [selectedDept, setSelectedDept] = useState('All');
   const [data, setData] = useState<any[]>([]);
   const [summary, setSummary] = useState<any>({});
