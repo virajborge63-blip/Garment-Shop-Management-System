@@ -34,7 +34,7 @@ pattern.
 
 | Finding | Status | Commit |
 |---|---|---|
-| F-13 | Pending | - |
+| F-13 | Done - log-matched; Asia/Kolkata business dates, no stored timestamp shifts | `ffcce56` |
 | F-14 | Pending | - |
 | F-15 | Pending | - |
 | F-16 | Pending | - |
