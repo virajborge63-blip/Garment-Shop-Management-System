@@ -190,7 +190,7 @@ export const AttendanceManagement: React.FC = () => {
   const handleRosterHoursChange = (empId: string, hours: number) => {
     setRoster((prev) =>
       prev.map((row) =>
-        row.employee_id === empId
+        row.employee_id === empId && row.status !== 'Unmarked'
           ? { ...row, working_hours: isNaN(hours) ? 0 : hours, is_dirty: true }
           : row
       )
@@ -201,7 +201,7 @@ export const AttendanceManagement: React.FC = () => {
   const handleRosterOtChange = (empId: string, ot: number) => {
     setRoster((prev) =>
       prev.map((row) =>
-        row.employee_id === empId
+        row.employee_id === empId && row.status !== 'Unmarked'
           ? { ...row, overtime_hours: isNaN(ot) ? 0 : ot, is_dirty: true }
           : row
       )
@@ -212,7 +212,7 @@ export const AttendanceManagement: React.FC = () => {
   const handleRosterNotesChange = (empId: string, notes: string) => {
     setRoster((prev) =>
       prev.map((row) =>
-        row.employee_id === empId
+        row.employee_id === empId && row.status !== 'Unmarked'
           ? { ...row, notes, is_dirty: true }
           : row
       )
@@ -243,7 +243,7 @@ export const AttendanceManagement: React.FC = () => {
   const handleMarkUnmarkedPresent = () => {
     setRoster((prev) =>
       prev.map((row) => {
-        if (row.status === ('Unmarked' as any)) {
+        if (row.status === 'Unmarked') {
           return {
             ...row,
             status: 'Present',
@@ -257,17 +257,22 @@ export const AttendanceManagement: React.FC = () => {
     setHasUnsavedChanges(true);
   };
 
-  // Save all modified or whole roster in 1 single transaction
+  // Only marked attendance rows are eligible for bulk save.
   const handleSaveAllRoster = async () => {
     try {
       setIsSavingBatch(true);
       const token = localStorage.getItem('erp_token');
       
       // Get all rows that are either dirty or currently marked
-      const rowsToSave = roster.filter((r) => r.is_dirty || r.status !== ('Unmarked' as any));
+      const rowsToSave = roster.filter((row) => row.status !== 'Unmarked');
       if (rowsToSave.length === 0) {
-        setFeedback({ type: 'success', message: 'No attendance changes to save.' });
-        setIsSavingBatch(false);
+        const hasUnmarkedChanges = roster.some((row) => row.is_dirty && row.status === 'Unmarked');
+        setFeedback({
+          type: hasUnmarkedChanges ? 'error' : 'success',
+          message: hasUnmarkedChanges
+            ? 'Choose an attendance status before saving these changes.'
+            : 'No attendance changes to save.',
+        });
         return;
       }
 
@@ -309,6 +314,10 @@ export const AttendanceManagement: React.FC = () => {
   const handleSaveSingleRow = async (empId: string) => {
     const row = roster.find((r) => r.employee_id === empId);
     if (!row) return;
+    if (row.status === 'Unmarked') {
+      setFeedback({ type: 'error', message: 'Choose an attendance status before saving this row.' });
+      return;
+    }
 
     try {
       const token = localStorage.getItem('erp_token');
@@ -321,7 +330,7 @@ export const AttendanceManagement: React.FC = () => {
         body: JSON.stringify({
           employee_id: row.employee_id,
           date: selectedDate,
-          status: row.status === ('Unmarked' as any) ? 'Present' : row.status,
+          status: row.status,
           working_hours: row.working_hours,
           overtime_hours: row.overtime_hours,
           notes: row.notes,
@@ -366,7 +375,7 @@ export const AttendanceManagement: React.FC = () => {
       const matchStatus =
         rosterStatusFilter === 'All' ||
         (rosterStatusFilter === 'Unmarked'
-          ? row.status === ('Unmarked' as any)
+          ? row.status === 'Unmarked'
           : row.status === rosterStatusFilter);
 
       return matchSearch && matchDept && matchStatus;
@@ -836,7 +845,7 @@ export const AttendanceManagement: React.FC = () => {
                     </tr>
                   ) : (
                     filteredRoster.map((row, idx) => {
-                      const isRowUnmarked = row.status === ('Unmarked' as any);
+                      const isRowUnmarked = row.status === 'Unmarked';
                       const isRowPresent = row.status === 'Present';
                       const isRowAbsent = row.status === 'Absent';
                       const isRowHalfDay = row.status === 'Half Day';
@@ -920,8 +929,9 @@ export const AttendanceManagement: React.FC = () => {
                             <div className="inline-flex items-center gap-1">
                               <input
                                 type="number"
+                                disabled={isRowUnmarked}
                                 min="0"
-                                max="24"
+                                max="16"
                                 step="0.5"
                                 value={row.working_hours}
                                 onChange={(e) => handleRosterHoursChange(row.employee_id, parseFloat(e.target.value))}
@@ -936,8 +946,9 @@ export const AttendanceManagement: React.FC = () => {
                             <div className="inline-flex items-center gap-1">
                               <input
                                 type="number"
+                                disabled={isRowUnmarked}
                                 min="0"
-                                max="16"
+                                max="2"
                                 step="0.5"
                                 value={row.overtime_hours}
                                 onChange={(e) => handleRosterOtChange(row.employee_id, parseFloat(e.target.value))}
@@ -955,6 +966,7 @@ export const AttendanceManagement: React.FC = () => {
                           <td className="py-2.5 px-3">
                             <input
                               type="text"
+                              disabled={isRowUnmarked}
                               value={row.notes}
                               onChange={(e) => handleRosterNotesChange(row.employee_id, e.target.value)}
                               placeholder="e.g. Counter 2, Alteration rush, Late 20m"

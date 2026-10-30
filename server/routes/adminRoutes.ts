@@ -510,8 +510,8 @@ async function getAttendanceRoster(targetDate: string) {
       department: emp.department,
       designation: emp.designation,
       avatar_url: emp.avatar_url,
-      status: att ? att.status : 'Present',
-      working_hours: att ? att.working_hours : 8,
+      status: att ? att.status : 'Unmarked',
+      working_hours: att ? att.working_hours : 0,
       overtime_hours: att ? att.overtime_hours : 0,
       notes: att?.notes || '',
     };

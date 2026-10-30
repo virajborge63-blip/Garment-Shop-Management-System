@@ -200,7 +200,7 @@ export interface RosterEmployeeRow {
   department: string;
   designation: string;
   avatar_url?: string;
-  status: AttendanceStatus;
+  status: AttendanceStatus | 'Unmarked';
   working_hours: number;
   overtime_hours: number;
   notes: string;
@@ -244,4 +244,3 @@ export interface SuperAdminDashboardData {
   }>;
   recentSecurityEvents: AuditLogItem[];
 }
-

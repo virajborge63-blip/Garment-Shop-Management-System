@@ -152,6 +152,32 @@ describe('API characterization', () => {
     expect(record?.overtime_hours).toBe(1);
   });
 
+  it('keeps unrecorded attendance unmarked and excludes it from payroll', async () => {
+    const date = '2025-03-03';
+    const roster = await request(app)
+      .get(`/api/admin/attendance/roster?date=${date}`)
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    expect(roster.status).toBe(200);
+    expect(roster.body.roster.find((row: { employee_id: string }) => row.employee_id === employeeId)).toMatchObject({
+      status: 'Unmarked',
+      working_hours: 0,
+      overtime_hours: 0,
+    });
+    expect(roster.body.summary.present).toBe(0);
+
+    const generated = await request(app)
+      .post('/api/admin/payroll/generate')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ month: 3, year: 2025, employee_id: employeeId });
+
+    expect(generated.status).toBe(200);
+    const payroll = await Payroll.findOne({ employee_id: employeeId, month: 3, year: 2025 });
+    expect(payroll?.present_days).toBe(0);
+    expect(payroll?.net_salary).toBe(0);
+    expect(await Attendance.countDocuments({ employee_id: employeeId, date })).toBe(0);
+  });
+
   it('rejects invalid attendance dates, employees, statuses, and hour ranges', async () => {
     const invalidPayloads = [
       { employee_id: employeeId, date: '2025-02-30', status: 'Present' },
