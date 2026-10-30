@@ -152,6 +152,64 @@ describe('API characterization', () => {
     expect(record?.overtime_hours).toBe(1);
   });
 
+  it('rejects invalid attendance dates, employees, statuses, and hour ranges', async () => {
+    const invalidPayloads = [
+      { employee_id: employeeId, date: '2025-02-30', status: 'Present' },
+      { employee_id: `MISSING-${suffix}`, date: '2025-02-03', status: 'Present' },
+      { employee_id: employeeId, date: '2025-02-03', status: 'Working' },
+      { employee_id: employeeId, date: '2025-02-03', status: 'Present', working_hours: 16.1 },
+      { employee_id: employeeId, date: '2025-02-03', status: 'Present', overtime_hours: 2.1 },
+      { employee_id: employeeId, date: '2025-02-03', status: 'Present', working_hours: -1 },
+      { employee_id: employeeId, date: '2025-02-03', status: 'Present', overtime_hours: -0.1 },
+      { employee_id: employeeId, date: '2025-02-03', status: 'Present', working_hours: 'NaN' },
+    ];
+
+    for (const payload of invalidPayloads) {
+      const response = await request(app)
+        .post('/api/admin/attendance')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send(payload);
+
+      expect(response.status, JSON.stringify(payload)).toBe(400);
+    }
+
+    expect(await Attendance.countDocuments({ date: '2025-02-03' })).toBe(0);
+  });
+
+  it('accepts attendance at the confirmed daily hour limits', async () => {
+    const response = await request(app)
+      .post('/api/admin/attendance')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        employee_id: employeeId,
+        date: '2025-02-05',
+        status: 'Present',
+        working_hours: 16,
+        overtime_hours: 2,
+      });
+
+    expect(response.status).toBe(200);
+    const record = await Attendance.findOne({ employee_id: employeeId, date: '2025-02-05' });
+    expect(record?.working_hours).toBe(16);
+    expect(record?.overtime_hours).toBe(2);
+  });
+
+  it('rejects a batch if any attendance row is invalid before saving any rows', async () => {
+    const response = await request(app)
+      .post('/api/admin/attendance/batch')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        date: '2025-02-04',
+        records: [
+          { employee_id: employeeId, status: 'Present', working_hours: 8, overtime_hours: 0 },
+          { employee_id: `MISSING-${suffix}`, status: 'Present', working_hours: 8, overtime_hours: 0 },
+        ],
+      });
+
+    expect(response.status).toBe(400);
+    expect(await Attendance.countDocuments({ date: '2025-02-04' })).toBe(0);
+  });
+
   it('generates payroll and allows an admin to mark it paid', async () => {
     await Attendance.create({
       employee_id: employeeId,

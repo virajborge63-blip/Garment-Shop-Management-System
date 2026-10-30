@@ -603,30 +603,114 @@ router.get('/attendance', async (req: AuthRequest, res: Response) => {
 });
 
 // Helper for saving batch attendance
+const attendanceStatuses = ['Present', 'Absent', 'Leave', 'Half Day'] as const;
+type AttendanceStatus = (typeof attendanceStatuses)[number];
+type ValidAttendanceRecord = {
+  employee_id: string;
+  status: AttendanceStatus;
+  working_hours: number;
+  overtime_hours: number;
+  notes: string;
+};
+type AttendanceValidationResult =
+  | { record: ValidAttendanceRecord; error?: never }
+  | { error: string; record?: never };
+
+function isValidAttendanceDate(date: unknown): date is string {
+  if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+  const parsed = new Date(`${date}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === date;
+}
+
+function parseAttendanceHours(value: unknown, fallback: number): number | undefined {
+  if (value === undefined) return fallback;
+  if (
+    (typeof value !== 'number' && typeof value !== 'string') ||
+    (typeof value === 'string' && value.trim() === '')
+  ) {
+    return undefined;
+  }
+  const hours = Number(value);
+  return Number.isFinite(hours) ? hours : undefined;
+}
+
+function validateAttendanceInput(input: unknown, date: unknown): AttendanceValidationResult {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    return { error: 'Each attendance record must be an object.' };
+  }
+  const recordInput = input as Record<string, unknown>;
+  if (typeof recordInput.employee_id !== 'string' || !recordInput.employee_id.trim()) {
+    return { error: 'Employee ID is required.' };
+  }
+  if (!isValidAttendanceDate(date)) {
+    return { error: 'Date must be a valid YYYY-MM-DD date.' };
+  }
+  const status = attendanceStatuses.find((validStatus) => validStatus === recordInput.status);
+  if (!status) {
+    return { error: 'Attendance status is invalid.' };
+  }
+
+  const workingHours = parseAttendanceHours(recordInput.working_hours, 8);
+  const overtimeHours = parseAttendanceHours(recordInput.overtime_hours, 0);
+  if (workingHours === undefined || workingHours < 0 || workingHours > 16) {
+    return { error: 'Working hours must be a finite number from 0 to 16.' };
+  }
+  if (overtimeHours === undefined || overtimeHours < 0 || overtimeHours > 2) {
+    return { error: 'Overtime hours must be a finite number from 0 to 2.' };
+  }
+  if (recordInput.notes !== undefined && typeof recordInput.notes !== 'string') {
+    return { error: 'Attendance notes must be a string.' };
+  }
+
+  return {
+    record: {
+      employee_id: recordInput.employee_id.trim().toUpperCase(),
+      status,
+      working_hours: workingHours,
+      overtime_hours: overtimeHours,
+      notes: typeof recordInput.notes === 'string' ? recordInput.notes : '',
+    },
+  };
+}
+
 async function handleBatchAttendance(req: AuthRequest, res: Response) {
   try {
+    if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+      return res.status(400).json({ error: 'Request body must be an object.' });
+    }
     const { date, records } = req.body;
-    if (!date || !Array.isArray(records)) {
-      return res.status(400).json({ error: 'Date and records array are required.' });
+    if (!isValidAttendanceDate(date) || !Array.isArray(records)) {
+      return res.status(400).json({ error: 'A valid YYYY-MM-DD date and records array are required.' });
+    }
+
+    const validatedRecords: ValidAttendanceRecord[] = [];
+    for (const item of records) {
+      const validated = validateAttendanceInput(item, date);
+      if ('error' in validated) return res.status(400).json({ error: validated.error });
+      validatedRecords.push(validated.record);
+    }
+
+    const employeeIds = [...new Set(validatedRecords.map((record) => record.employee_id))];
+    const employees = await Employee.find({ employee_id: { $in: employeeIds } })
+      .select({ employee_id: 1 })
+      .lean();
+    const existingEmployeeIds = new Set(employees.map((employee) => employee.employee_id));
+    const missingEmployeeId = employeeIds.find((employeeId) => !existingEmployeeIds.has(employeeId));
+    if (missingEmployeeId) {
+      return res.status(400).json({ error: `Employee ${missingEmployeeId} does not exist.` });
     }
 
     const adminName = req.user!.name || req.user!.username || 'Admin';
 
-    for (const item of records) {
-      if (!item.employee_id) continue;
-      const status = item.status || 'Present';
-      const wHours = item.working_hours !== undefined ? parseFloat(item.working_hours) : 8;
-      const otHours = item.overtime_hours !== undefined ? parseFloat(item.overtime_hours) : 0;
-      const notes = item.notes || '';
-
+    for (const record of validatedRecords) {
       await Attendance.findOneAndUpdate(
-        { employee_id: item.employee_id, date },
+        { employee_id: record.employee_id, date },
         {
           $set: {
-            status,
-            working_hours: wHours,
-            overtime_hours: otHours,
-            notes,
+            status: record.status,
+            working_hours: record.working_hours,
+            overtime_hours: record.overtime_hours,
+            notes: record.notes,
             updated_by: adminName,
             updated_at: new Date(),
           },
@@ -635,7 +719,7 @@ async function handleBatchAttendance(req: AuthRequest, res: Response) {
             created_at: new Date(),
           },
         },
-        { upsert: true, new: true }
+        { upsert: true, returnDocument: 'after', runValidators: true }
       );
     }
 
@@ -645,10 +729,10 @@ async function handleBatchAttendance(req: AuthRequest, res: Response) {
       'ATTENDANCE_BULK_LOGGED',
       `Date: ${date}`,
       '',
-      `Updated attendance roster for ${records.length} employees`
+      `Updated attendance roster for ${validatedRecords.length} employees`
     );
 
-    return res.json({ success: true, message: `Attendance for ${records.length} employees saved for ${date}.` });
+    return res.json({ success: true, message: `Attendance for ${validatedRecords.length} employees saved for ${date}.` });
   } catch (err: any) {
     console.error('Bulk attendance error:', err);
     return res.status(500).json({ error: 'Failed to save bulk attendance.' });
@@ -662,24 +746,34 @@ router.post('/attendance/bulk', handleBatchAttendance);
 // Helper for saving single attendance
 async function handleSingleAttendance(req: AuthRequest, res: Response) {
   try {
+    if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+      return res.status(400).json({ error: 'Request body must be an object.' });
+    }
     const { employee_id, date, status, working_hours, overtime_hours, notes } = req.body;
 
-    if (!employee_id || !date || !status) {
-      return res.status(400).json({ error: 'Employee ID, date, and status are required.' });
+    const validated = validateAttendanceInput(
+      { employee_id, status, working_hours, overtime_hours, notes },
+      date
+    );
+    if ('error' in validated) {
+      return res.status(400).json({ error: validated.error });
+    }
+
+    const employeeExists = await Employee.exists({ employee_id: validated.record.employee_id });
+    if (!employeeExists) {
+      return res.status(400).json({ error: 'Employee does not exist.' });
     }
 
     const adminName = req.user!.name || req.user!.username || 'Admin';
-    const wHours = working_hours !== undefined ? parseFloat(working_hours) : 8;
-    const otHours = overtime_hours !== undefined ? parseFloat(overtime_hours) : 0;
 
     await Attendance.findOneAndUpdate(
-      { employee_id, date },
+      { employee_id: validated.record.employee_id, date },
       {
         $set: {
-          status,
-          working_hours: wHours,
-          overtime_hours: otHours,
-          notes: notes || '',
+          status: validated.record.status,
+          working_hours: validated.record.working_hours,
+          overtime_hours: validated.record.overtime_hours,
+          notes: validated.record.notes,
           updated_by: adminName,
           updated_at: new Date(),
         },
@@ -688,11 +782,12 @@ async function handleSingleAttendance(req: AuthRequest, res: Response) {
           created_at: new Date(),
         },
       },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after', runValidators: true }
     );
 
     return res.json({ success: true, message: `Attendance updated for ${employee_id} on ${date}.` });
   } catch (err: any) {
+    console.error('Single attendance error:', err);
     return res.status(500).json({ error: 'Failed to update attendance record.' });
   }
 }
