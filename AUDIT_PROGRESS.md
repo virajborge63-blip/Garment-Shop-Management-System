@@ -45,7 +45,7 @@ pattern.
 | Finding | Status | Commit |
 |---|---|---|
 | F-18 | Done - log-matched | `0025623` |
-| F-20 | Pending | - |
+| F-20 | Done - remember-me selects local/session storage; API consumers read both; logout and invalid-session cleanup clear both; tests/build passed | `21b7a24` |
 | F-22 | Pending | - |
 | F-23 | Pending | - |
 | F-19 | Pending | - |
