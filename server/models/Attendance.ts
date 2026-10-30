@@ -47,6 +47,7 @@ const AttendanceSchema = new Schema<IAttendance>(
 );
 
 AttendanceSchema.index({ employee_id: 1, date: 1 }, { unique: true });
+AttendanceSchema.index({ date: -1, employee_id: 1 });
 
 export const Attendance: Model<IAttendance> = mongoose.models.Attendance
   ? (mongoose.models.Attendance as Model<IAttendance>)

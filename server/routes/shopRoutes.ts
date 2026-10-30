@@ -1,5 +1,6 @@
 import { Router, Response } from 'express';
 import { createHash } from 'node:crypto';
+import { Types } from 'mongoose';
 import {
   Category,
   Product,
@@ -696,55 +697,111 @@ router.post('/sales', async (req: AuthRequest, res: Response) => {
 // ==========================================
 router.get('/reports', async (req: AuthRequest, res: Response) => {
   try {
-    const products = await Product.find();
-    let totalStockItems = 0;
-    let totalCostValuation = 0;
-    let totalRetailValuation = 0;
-    let lowStockCount = 0;
+    const [productReport, salesReport, totalCategories] = await Promise.all([
+      Product.aggregate<{
+        summary: Array<{
+          totalProducts: number;
+          totalStockUnits: number;
+          totalCostValuation: number;
+          totalRetailValuation: number;
+          lowStockAlerts: number;
+        }>;
+        lowStockProducts: Array<{
+          _id: Types.ObjectId;
+          name: string;
+          sku: string;
+          category: string;
+          stock_quantity: number;
+          min_stock_alert: number;
+          selling_price: number;
+        }>;
+      }>([
+        {
+          $facet: {
+            summary: [
+              {
+                $group: {
+                  _id: null,
+                  totalProducts: { $sum: 1 },
+                  totalStockUnits: { $sum: '$stock_quantity' },
+                  totalCostValuation: {
+                    $sum: { $multiply: ['$stock_quantity', '$cost_price'] },
+                  },
+                  totalRetailValuation: {
+                    $sum: { $multiply: ['$stock_quantity', '$selling_price'] },
+                  },
+                  lowStockAlerts: {
+                    $sum: {
+                      $cond: [{ $lte: ['$stock_quantity', '$min_stock_alert'] }, 1, 0],
+                    },
+                  },
+                },
+              },
+              { $project: { _id: 0 } },
+            ],
+            lowStockProducts: [
+              { $match: { $expr: { $lte: ['$stock_quantity', '$min_stock_alert'] } } },
+              {
+                $project: {
+                  name: 1,
+                  sku: 1,
+                  category: 1,
+                  stock_quantity: 1,
+                  min_stock_alert: 1,
+                  selling_price: 1,
+                },
+              },
+            ],
+          },
+        },
+      ]),
+      Sale.aggregate<{
+        _id: null;
+        totalInvoicesIssued: number;
+        totalSalesRevenue: number;
+      }>([
+        {
+          $group: {
+            _id: null,
+            totalInvoicesIssued: { $sum: 1 },
+            totalSalesRevenue: {
+              $sum: {
+                $cond: [{ $eq: ['$status', 'Completed'] }, '$total_amount', 0],
+              },
+            },
+          },
+        },
+      ]),
+      Category.countDocuments(),
+    ]);
 
-    for (const p of products) {
-      totalStockItems += p.stock_quantity;
-      totalCostValuation += p.stock_quantity * p.cost_price;
-      totalRetailValuation += p.stock_quantity * p.selling_price;
-      if (p.stock_quantity <= p.min_stock_alert) {
-        lowStockCount++;
-      }
-    }
-
-    // Sales totals
-    const sales = await Sale.find();
-    let totalRevenue = 0;
-    for (const s of sales) {
-      if (s.status === 'Completed') {
-        totalRevenue += s.total_amount;
-      }
-    }
-
-    const categories = await Category.find();
+    const productTotals = productReport[0]?.summary[0];
+    const salesTotals = salesReport[0];
+    const totalStockItems = productTotals?.totalStockUnits || 0;
+    const totalCostValuation = productTotals?.totalCostValuation || 0;
+    const totalRetailValuation = productTotals?.totalRetailValuation || 0;
 
     return res.json({
       summary: {
-        totalProducts: products.length,
-        totalCategories: categories.length,
+        totalProducts: productTotals?.totalProducts || 0,
+        totalCategories,
         totalStockUnits: totalStockItems,
         totalCostValuation: Math.round(totalCostValuation),
         totalRetailValuation: Math.round(totalRetailValuation),
         projectedGrossMargin: Math.round(totalRetailValuation - totalCostValuation),
-        lowStockAlerts: lowStockCount,
-        totalInvoicesIssued: sales.length,
-        totalSalesRevenue: Math.round(totalRevenue),
+        lowStockAlerts: productTotals?.lowStockAlerts || 0,
+        totalInvoicesIssued: salesTotals?.totalInvoicesIssued || 0,
+        totalSalesRevenue: Math.round(salesTotals?.totalSalesRevenue || 0),
       },
-      lowStockProducts: products
-        .filter((p) => p.stock_quantity <= p.min_stock_alert)
-        .map((p) => ({
-          id: p._id.toString(),
-          name: p.name,
-          sku: p.sku,
-          category: p.category,
-          stock_quantity: p.stock_quantity,
-          min_stock_alert: p.min_stock_alert,
-          selling_price: p.selling_price,
-        })),
+      lowStockProducts: (productReport[0]?.lowStockProducts || []).map((product) => ({
+        id: product._id.toString(),
+        name: product.name,
+        sku: product.sku,
+        category: product.category,
+        stock_quantity: product.stock_quantity,
+        min_stock_alert: product.min_stock_alert,
+        selling_price: product.selling_price,
+      })),
     });
   } catch (err: any) {
     return res.status(500).json({ error: 'Failed to generate store reports.' });

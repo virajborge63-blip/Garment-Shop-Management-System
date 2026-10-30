@@ -3,6 +3,12 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import { getBusinessDate } from '../shared/businessDate.ts';
+import {
+  ATTENDANCE_PAGE_SIZE_DEFAULT,
+  ATTENDANCE_PAGE_SIZE_MAX,
+  EMPLOYEE_PAGE_SIZE_DEFAULT,
+  EMPLOYEE_PAGE_SIZE_MAX,
+} from '../shared/pagination.ts';
 
 const mongo = await MongoMemoryReplSet.create({
   replSet: { count: 1 },
@@ -15,7 +21,7 @@ process.env.SESSION_SECRET = 'test-session-secret-with-more-than-thirty-two-char
 const mongoose = (await import('mongoose')).default;
 await mongoose.connect(process.env.MONGODB_URI);
 
-const { Attendance, Employee, Payroll, Product, Sale, Session, Setting, User, hashPassword } =
+const { Attendance, Category, Employee, Payroll, Product, Sale, Session, Setting, User, hashPassword } =
   await import('../server/db.ts');
 const { default: authRoutes } = await import('../server/routes/authRoutes.ts');
 const { default: adminRoutes } = await import('../server/routes/adminRoutes.ts');
@@ -370,6 +376,201 @@ describe('API characterization', () => {
 
     expect(response.status).toBe(200);
     expect(response.body).toHaveProperty('cards');
+  });
+
+  it('paginates employee and attendance lists, clamps limits, and rejects invalid pagination', async () => {
+    const employeePage = await request(app)
+      .get(`/api/admin/employees?limit=${EMPLOYEE_PAGE_SIZE_MAX + 1}`)
+      .set('Authorization', `Bearer ${adminToken}`);
+    const attendancePage = await request(app)
+      .get(`/api/admin/attendance?limit=${ATTENDANCE_PAGE_SIZE_MAX + 1}`)
+      .set('Authorization', `Bearer ${adminToken}`);
+    const invalidEmployeePage = await request(app)
+      .get('/api/admin/employees?page=not-a-number')
+      .set('Authorization', `Bearer ${adminToken}`);
+    const invalidAttendanceLimit = await request(app)
+      .get('/api/admin/attendance?limit=0')
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    expect(employeePage.status).toBe(200);
+    expect(employeePage.body).toMatchObject({
+      page: 1,
+      limit: EMPLOYEE_PAGE_SIZE_MAX,
+    });
+    expect(employeePage.body.data.length).toBeLessThanOrEqual(EMPLOYEE_PAGE_SIZE_MAX);
+    expect(attendancePage.status).toBe(200);
+    expect(attendancePage.body.limit).toBe(ATTENDANCE_PAGE_SIZE_MAX);
+    expect(invalidEmployeePage.status).toBe(400);
+    expect(invalidAttendanceLimit.status).toBe(400);
+    expect(EMPLOYEE_PAGE_SIZE_DEFAULT).toBe(50);
+    expect(ATTENDANCE_PAGE_SIZE_DEFAULT).toBe(100);
+  });
+
+  it('filters attendance by inclusive date range and employee with pagination', async () => {
+    const dates = ['2050-01-01', '2050-01-02'];
+    await Promise.all(
+      dates.map((date) => Attendance.create({
+        employee_id: employeeId,
+        date,
+        status: 'Present',
+        working_hours: 8,
+        overtime_hours: 0,
+      }))
+    );
+
+    try {
+      const response = await request(app)
+        .get('/api/admin/attendance')
+        .query({
+          start_date: dates[0],
+          end_date: dates[1],
+          employee_id: employeeId,
+          page: 2,
+          limit: 1,
+        })
+        .set('Authorization', `Bearer ${adminToken}`);
+      const invalidRange = await request(app)
+        .get('/api/admin/attendance')
+        .query({ start_date: dates[1], end_date: dates[0] })
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({ page: 2, limit: 1, total: 2 });
+      expect(response.body.data).toHaveLength(1);
+      expect(response.body.data[0]).toMatchObject({
+        employee_id: employeeId,
+        date: dates[0],
+      });
+      expect(invalidRange.status).toBe(400);
+    } finally {
+      await Attendance.deleteMany({ employee_id: employeeId, date: { $in: dates } });
+    }
+  });
+
+  it('preserves inventory and sales report totals using database aggregates', async () => {
+    const skuPrefix = `F14-${suffix}`;
+    const saleKeyPrefix = `f14-${suffix}`;
+    await Product.create([
+      {
+        name: 'F14 In Stock',
+        sku: `${skuPrefix}-IN`,
+        category: 'F14 Test',
+        cost_price: 10.25,
+        selling_price: 20.5,
+        stock_quantity: 3,
+        min_stock_alert: 2,
+      },
+      {
+        name: 'F14 Low Stock',
+        sku: `${skuPrefix}-LOW`,
+        category: 'F14 Test',
+        cost_price: 2,
+        selling_price: 4,
+        stock_quantity: 1,
+        min_stock_alert: 2,
+      },
+    ]);
+    await Sale.create([
+      {
+        bill_number: `${saleKeyPrefix}-completed`,
+        items: [],
+        subtotal: 100,
+        discount: 0,
+        tax: 0,
+        total_amount: 100,
+        payment_method: 'Cash',
+        status: 'Completed',
+        idempotency_key: `${saleKeyPrefix}-completed`,
+        idempotency_hash: 'test-hash',
+      },
+      {
+        bill_number: `${saleKeyPrefix}-cancelled`,
+        items: [],
+        subtotal: 50,
+        discount: 0,
+        tax: 0,
+        total_amount: 50,
+        payment_method: 'Cash',
+        status: 'Cancelled',
+        idempotency_key: `${saleKeyPrefix}-cancelled`,
+        idempotency_hash: 'test-hash',
+      },
+    ]);
+
+    try {
+      const response = await request(app)
+        .get('/api/shop/reports')
+        .set('Authorization', `Bearer ${adminToken}`);
+      const products = await Product.find();
+      const sales = await Sale.find();
+
+      expect(response.status).toBe(200);
+      expect(response.body.summary.totalProducts).toBe(products.length);
+      expect(response.body.summary.totalCategories).toBe(await Category.countDocuments());
+      expect(response.body.summary.totalStockUnits).toBe(
+        products.reduce((sum, product) => sum + product.stock_quantity, 0)
+      );
+      expect(response.body.summary.totalCostValuation).toBe(
+        Math.round(products.reduce((sum, product) => sum + product.stock_quantity * product.cost_price, 0))
+      );
+      expect(response.body.summary.totalInvoicesIssued).toBe(sales.length);
+      expect(response.body.summary.totalSalesRevenue).toBe(
+        Math.round(
+          sales.reduce(
+            (sum, sale) => sum + (sale.status === 'Completed' ? sale.total_amount : 0),
+            0
+          )
+        )
+      );
+      expect(response.body.lowStockProducts).toEqual(
+        expect.arrayContaining([expect.objectContaining({ sku: `${skuPrefix}-LOW`.toUpperCase() })])
+      );
+    } finally {
+      await Product.deleteMany({ sku: { $in: [`${skuPrefix}-IN`, `${skuPrefix}-LOW`] } });
+      await Sale.deleteMany({ idempotency_key: { $in: [`${saleKeyPrefix}-completed`, `${saleKeyPrefix}-cancelled`] } });
+    }
+  });
+
+  it('keeps the complete daily roster when active employees exceed the employee page default', async () => {
+    const rosterEmployees = Array.from({ length: EMPLOYEE_PAGE_SIZE_DEFAULT + 1 }, (_, index) => ({
+      employee_id: `F14-ROSTER-${suffix}-${index}`,
+      name: `F14 Roster Employee ${index}`,
+      email: `f14-roster-${suffix}-${index}@example.test`,
+      department: 'F14-Roster',
+      designation: 'Test Worker',
+      joining_date: '2026-01-01',
+      per_day_salary: 800,
+      monthly_salary: 20800,
+      overtime_rate: 150,
+      status: 'active' as const,
+      is_active: true,
+    }));
+    const employeeIds = rosterEmployees.map((employee) => employee.employee_id.toUpperCase());
+    const activeBefore = await Employee.countDocuments({
+      status: 'active',
+      is_active: { $ne: false },
+    });
+
+    await Employee.create(rosterEmployees);
+    try {
+      const employeeList = await request(app)
+        .get('/api/admin/employees?department=F14-Roster')
+        .set('Authorization', `Bearer ${adminToken}`);
+      const roster = await request(app)
+        .get('/api/admin/attendance/roster?date=2050-02-01')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(employeeList.status).toBe(200);
+      expect(employeeList.body.data).toHaveLength(EMPLOYEE_PAGE_SIZE_DEFAULT);
+      expect(employeeList.body.total).toBe(EMPLOYEE_PAGE_SIZE_DEFAULT + 1);
+      expect(roster.status).toBe(200);
+      expect(roster.body.summary.totalEmployees).toBe(activeBefore + rosterEmployees.length);
+      expect(roster.body.roster).toHaveLength(roster.body.summary.totalEmployees);
+      expect(roster.body.roster.map((row: { employee_id: string }) => row.employee_id))
+        .toEqual(expect.arrayContaining(employeeIds));
+    } finally {
+      await Employee.deleteMany({ employee_id: { $in: employeeIds } });
+    }
   });
 
   it('creates or updates an attendance record through the admin API', async () => {
@@ -1082,10 +1283,10 @@ describe('API characterization', () => {
       .get('/api/employee/profile')
       .set('Authorization', `Bearer ${employeeToken}`);
 
-    expect(archivedList.body.employees.map((item: { employee_id: string }) => item.employee_id)).toContain(employeeId);
-    expect(defaultList.body.employees.map((item: { employee_id: string }) => item.employee_id)).not.toContain(employeeId);
+    expect(archivedList.body.data.map((item: { employee_id: string }) => item.employee_id)).toContain(employeeId);
+    expect(defaultList.body.data.map((item: { employee_id: string }) => item.employee_id)).not.toContain(employeeId);
     expect(roster.body.roster.map((item: { employee_id: string }) => item.employee_id)).not.toContain(employeeId);
-    expect(history.body.attendance.map((item: { employee_id: string }) => item.employee_id)).toContain(employeeId);
+    expect(history.body.data.map((item: { employee_id: string }) => item.employee_id)).toContain(employeeId);
     expect(payrollHistory.body.payroll.map((item: { employee_id: string }) => item.employee_id)).toContain(employeeId);
     expect(await Attendance.exists({ employee_id: employeeId, date })).not.toBeNull();
     expect(await Payroll.exists({ _id: payroll._id })).not.toBeNull();

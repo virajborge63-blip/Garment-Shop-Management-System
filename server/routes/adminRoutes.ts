@@ -18,6 +18,13 @@ import {
   getBusinessDateParts,
   getWeekdayAbbreviation,
 } from '../../shared/businessDate.ts';
+import {
+  ATTENDANCE_PAGE_SIZE_DEFAULT,
+  ATTENDANCE_PAGE_SIZE_MAX,
+  EMPLOYEE_PAGE_SIZE_DEFAULT,
+  EMPLOYEE_PAGE_SIZE_MAX,
+} from '../../shared/pagination.ts';
+import { parsePagination } from '../pagination.ts';
 
 const router = Router();
 
@@ -76,16 +83,24 @@ router.get('/dashboard', async (req: AuthRequest, res: Response) => {
     }
 
     // Monthly overtime & working days
-    const monthRecords = await Attendance.find({
-      date: new RegExp(`^${monthPrefix}`),
-    });
-
-    let totalOvertimeHours = 0;
-    const recordedDates = new Set<string>();
-    for (const rec of monthRecords) {
-      totalOvertimeHours += rec.overtime_hours || 0;
-      recordedDates.add(rec.date);
-    }
+    const monthStart = `${monthPrefix}-01`;
+    const monthEnd = `${monthPrefix}-31`;
+    const [monthlyOvertime, activeStaff] = await Promise.all([
+      Attendance.aggregate<{
+        _id: string;
+        overtime: number;
+      }>([
+        { $match: { date: { $gte: monthStart, $lte: monthEnd } } },
+        {
+          $group: {
+            _id: '$employee_id',
+            overtime: { $sum: { $ifNull: ['$overtime_hours', 0] } },
+          },
+        },
+      ]),
+      Employee.find({ status: 'active' }).lean(),
+    ]);
+    const totalOvertimeHours = monthlyOvertime.reduce((sum, record) => sum + record.overtime, 0);
 
     // Settings
     const stdDaysSetting = await Setting.findOne({ key: 'standard_working_days' });
@@ -103,70 +118,98 @@ router.get('/dashboard', async (req: AuthRequest, res: Response) => {
     }
 
     // Recent 7 Days Attendance Trend Chart
+    const firstTrendDate = addCalendarDays(today, -6);
+    const dailyAttendanceCounts = await Attendance.aggregate<{
+      _id: { date: string; status: string };
+      count: number;
+    }>([
+      { $match: { date: { $gte: firstTrendDate, $lte: today } } },
+      { $group: { _id: { date: '$date', status: '$status' }, count: { $sum: 1 } } },
+    ]);
+    const dailyCounts = new Map<string, Record<string, number>>();
+    for (const entry of dailyAttendanceCounts) {
+      const counts = dailyCounts.get(entry._id.date) || {};
+      counts[entry._id.status] = entry.count;
+      dailyCounts.set(entry._id.date, counts);
+    }
+
     const dailyAttendance = [];
     for (let i = 6; i >= 0; i--) {
       const dateStr = addCalendarDays(today, -i);
       const dayName = getWeekdayAbbreviation(dateStr);
-
-      const dayRecs = await Attendance.find({ date: dateStr });
-      let p = 0, a = 0, l = 0, h = 0;
-      for (const r of dayRecs) {
-        if (r.status === 'Present') p++;
-        else if (r.status === 'Absent') a++;
-        else if (r.status === 'Leave') l++;
-        else if (r.status === 'Half Day') h++;
-      }
+      const counts = dailyCounts.get(dateStr) || {};
 
       dailyAttendance.push({
         date: dateStr,
         day: dayName,
-        present: p,
-        absent: a,
-        leave: l,
-        halfDay: h,
+        present: counts.Present || 0,
+        absent: counts.Absent || 0,
+        leave: counts.Leave || 0,
+        halfDay: counts['Half Day'] || 0,
       });
     }
 
     // Monthly Comparison Chart (last 6 months)
     const monthlyComparison = [];
     const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const firstComparisonMonth = addCalendarMonths(currentYear, currentMonth, -5);
+    const monthlyAttendanceCounts = await Attendance.aggregate<{
+      _id: string;
+      total: number;
+      present: number;
+      halfDay: number;
+      overtime: number;
+    }>([
+      {
+        $match: {
+          date: {
+            $gte: `${firstComparisonMonth.year}-${String(firstComparisonMonth.month).padStart(2, '0')}-01`,
+            $lte: `${monthPrefix}-31`,
+          },
+        },
+      },
+      {
+        $group: {
+          _id: { $substrBytes: ['$date', 0, 7] },
+          total: { $sum: 1 },
+          present: { $sum: { $cond: [{ $eq: ['$status', 'Present'] }, 1, 0] } },
+          halfDay: { $sum: { $cond: [{ $eq: ['$status', 'Half Day'] }, 1, 0] } },
+          overtime: { $sum: { $ifNull: ['$overtime_hours', 0] } },
+        },
+      },
+    ]);
+    const monthlyCounts = new Map(monthlyAttendanceCounts.map((entry) => [entry._id, entry]));
+
     for (let i = 5; i >= 0; i--) {
       const { month: m, year: y } = addCalendarMonths(currentYear, currentMonth, -i);
       const mStr = `${y}-${String(m).padStart(2, '0')}`;
-
-      const mRecs = await Attendance.find({ date: new RegExp(`^${mStr}`) });
-      let mPresent = 0;
-      let mTotal = 0;
-      let mOt = 0;
-      for (const r of mRecs) {
-        mTotal++;
-        mOt += r.overtime_hours || 0;
-        if (r.status === 'Present') mPresent += 1;
-        else if (r.status === 'Half Day') mPresent += 0.5;
-      }
+      const totals = monthlyCounts.get(mStr);
+      const mPresent = (totals?.present || 0) + (totals?.halfDay || 0) * 0.5;
+      const mTotal = totals?.total || 0;
 
       const presentRate = mTotal > 0 ? Math.round((mPresent / mTotal) * 100) : 0;
       monthlyComparison.push({
         month: `${monthNames[m - 1]} ${y}`,
         presentRate,
-        totalOt: Math.round(mOt),
+        totalOt: Math.round(totals?.overtime || 0),
       });
     }
 
     // Overtime by department
-    const activeStaff = await Employee.find({ status: 'active' });
     const deptMap: Record<string, { count: number; ot: number }> = {};
+    const employeeDepartments = new Map<string, string>();
     for (const emp of activeStaff) {
       if (!deptMap[emp.department]) {
         deptMap[emp.department] = { count: 0, ot: 0 };
       }
       deptMap[emp.department].count++;
+      employeeDepartments.set(emp.employee_id, emp.department);
     }
 
-    for (const rec of monthRecords) {
-      const emp = activeStaff.find((e) => e.employee_id === rec.employee_id);
-      if (emp && deptMap[emp.department]) {
-        deptMap[emp.department].ot += rec.overtime_hours || 0;
+    for (const rec of monthlyOvertime) {
+      const department = employeeDepartments.get(rec._id);
+      if (department && deptMap[department]) {
+        deptMap[department].ot += rec.overtime;
       }
     }
 
@@ -178,9 +221,13 @@ router.get('/dashboard', async (req: AuthRequest, res: Response) => {
 
     // Recent 5 attendance records
     const recentAtt = await Attendance.find().sort({ created_at: -1 }).limit(5);
+    const recentEmployees = await Employee.find({
+      employee_id: { $in: recentAtt.map((record) => record.employee_id) },
+    }).lean();
+    const recentEmployeeMap = new Map(recentEmployees.map((employee) => [employee.employee_id, employee]));
     const recentAttendance = [];
     for (const r of recentAtt) {
-      const emp = await Employee.findOne({ employee_id: r.employee_id });
+      const emp = recentEmployeeMap.get(r.employee_id);
       recentAttendance.push({
         attendance_id: r._id.toString(),
         employee_id: r.employee_id,
@@ -239,6 +286,15 @@ router.get('/dashboard', async (req: AuthRequest, res: Response) => {
 router.get('/employees', async (req: AuthRequest, res: Response) => {
   try {
     const { search, department, status } = req.query;
+    const pagination = parsePagination(
+      req.query.page,
+      req.query.limit,
+      EMPLOYEE_PAGE_SIZE_DEFAULT,
+      EMPLOYEE_PAGE_SIZE_MAX
+    );
+    if (!pagination) {
+      return res.status(400).json({ error: 'Page and limit must be positive integers.' });
+    }
     const filter: any = {};
 
     if (req.query.include_archived !== 'true') {
@@ -262,27 +318,52 @@ router.get('/employees', async (req: AuthRequest, res: Response) => {
       ];
     }
 
+    const requestedSortField = req.query.sort_by;
+    const sortField =
+      typeof requestedSortField === 'string' &&
+      ['employee_id', 'name', 'monthly_salary'].includes(requestedSortField)
+        ? requestedSortField
+        : 'employee_id';
+    const sortDirection = req.query.sort_order === 'desc' ? -1 : 1;
+    const sort: Record<string, 1 | -1> = sortField === 'employee_id'
+      ? { employee_id: sortDirection }
+      : { [sortField]: sortDirection, employee_id: 1 };
+
+    const [employees, total] = await Promise.all([
+      Employee.find(filter).sort(sort).skip(pagination.skip).limit(pagination.limit).lean(),
+      Employee.countDocuments(filter),
+    ]);
     const { month: currentMonth, year: currentYear } = getBusinessDateParts();
     const monthPrefix = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
-
-    const employees = await Employee.find(filter).sort({ employee_id: 1 });
-    const monthAtt = await Attendance.find({ date: new RegExp(`^${monthPrefix}`) });
-
-    // Aggregate monthly attendance per employee
-    const statsMap: Record<string, { present: number; absent: number; leave: number; halfDay: number; ot: number }> = {};
-    for (const r of monthAtt) {
-      if (!statsMap[r.employee_id]) {
-        statsMap[r.employee_id] = { present: 0, absent: 0, leave: 0, halfDay: 0, ot: 0 };
-      }
-      if (r.status === 'Present') statsMap[r.employee_id].present++;
-      else if (r.status === 'Absent') statsMap[r.employee_id].absent++;
-      else if (r.status === 'Leave') statsMap[r.employee_id].leave++;
-      else if (r.status === 'Half Day') statsMap[r.employee_id].halfDay++;
-      statsMap[r.employee_id].ot += r.overtime_hours || 0;
-    }
+    const monthlyAttendance = employees.length > 0
+      ? await Attendance.aggregate<{
+          _id: string;
+          present: number;
+          absent: number;
+          leave: number;
+          overtime: number;
+        }>([
+          {
+            $match: {
+              employee_id: { $in: employees.map((employee) => employee.employee_id) },
+              date: { $gte: `${monthPrefix}-01`, $lte: `${monthPrefix}-31` },
+            },
+          },
+          {
+            $group: {
+              _id: '$employee_id',
+              present: { $sum: { $cond: [{ $eq: ['$status', 'Present'] }, 1, 0] } },
+              absent: { $sum: { $cond: [{ $eq: ['$status', 'Absent'] }, 1, 0] } },
+              leave: { $sum: { $cond: [{ $eq: ['$status', 'Leave'] }, 1, 0] } },
+              overtime: { $sum: { $ifNull: ['$overtime_hours', 0] } },
+            },
+          },
+        ])
+      : [];
+    const statsMap = new Map(monthlyAttendance.map((entry) => [entry._id, entry]));
 
     const employeeList = employees.map((emp) => {
-      const stats = statsMap[emp.employee_id] || { present: 0, absent: 0, leave: 0, halfDay: 0, ot: 0 };
+      const stats = statsMap.get(emp.employee_id);
       return {
         employee_id: emp.employee_id,
         name: emp.name,
@@ -297,14 +378,19 @@ router.get('/employees', async (req: AuthRequest, res: Response) => {
         overtime_rate: emp.overtime_rate,
         status: emp.status,
         avatar_url: emp.avatar_url,
-        present_days_month: stats.present,
-        absent_days_month: stats.absent,
-        leave_days_month: stats.leave,
-        ot_hours_month: stats.ot,
+        present_days_month: stats?.present || 0,
+        absent_days_month: stats?.absent || 0,
+        leave_days_month: stats?.leave || 0,
+        ot_hours_month: stats?.overtime || 0,
       };
     });
 
-    return res.json({ employees: employeeList });
+    return res.json({
+      data: employeeList,
+      page: pagination.page,
+      limit: pagination.limit,
+      total,
+    });
   } catch (err: any) {
     console.error('Error fetching employees:', err);
     return res.status(500).json({ error: 'Failed to retrieve employee directory.' });
@@ -694,26 +780,88 @@ router.get('/attendance/date/:date', async (req: AuthRequest, res: Response) => 
 // 3c. Get Filtered Attendance History (supports date, month, year, employee_id, status)
 router.get('/attendance', async (req: AuthRequest, res: Response) => {
   try {
-    const { date, month, year, employee_id, status } = req.query;
+    const { date, month, year, employee_id, status, start_date, end_date } = req.query;
+    const pagination = parsePagination(
+      req.query.page,
+      req.query.limit,
+      ATTENDANCE_PAGE_SIZE_DEFAULT,
+      ATTENDANCE_PAGE_SIZE_MAX
+    );
+    if (!pagination) {
+      return res.status(400).json({ error: 'Page and limit must be positive integers.' });
+    }
     const filter: any = {};
 
-    if (date && typeof date === 'string') {
-      filter.date = date;
-    } else if (month && year) {
-      const mStr = `${year}-${String(month).padStart(2, '0')}`;
-      filter.date = new RegExp(`^${mStr}`);
+    const hasDateRange = start_date !== undefined || end_date !== undefined;
+    const hasMonthFilter = month !== undefined || year !== undefined;
+    if (date !== undefined && (hasDateRange || hasMonthFilter)) {
+      return res.status(400).json({ error: 'Use only one attendance date filter.' });
+    }
+    if (hasDateRange && hasMonthFilter) {
+      return res.status(400).json({ error: 'Use either a date range or a month and year.' });
     }
 
-    if (employee_id && employee_id !== 'All') {
-      filter.employee_id = String(employee_id).toUpperCase();
+    if (date !== undefined) {
+      if (typeof date !== 'string' || !isValidAttendanceDate(date)) {
+        return res.status(400).json({ error: 'Date must be a valid YYYY-MM-DD value.' });
+      }
+      filter.date = date;
+    } else if (hasDateRange) {
+      if (
+        (start_date !== undefined &&
+          (typeof start_date !== 'string' || !isValidAttendanceDate(start_date))) ||
+        (end_date !== undefined &&
+          (typeof end_date !== 'string' || !isValidAttendanceDate(end_date)))
+      ) {
+        return res.status(400).json({ error: 'Date range values must be valid YYYY-MM-DD dates.' });
+      }
+      if (typeof start_date === 'string' && typeof end_date === 'string' && start_date > end_date) {
+        return res.status(400).json({ error: 'Start date must not be after end date.' });
+      }
+      filter.date = {};
+      if (typeof start_date === 'string') filter.date.$gte = start_date;
+      if (typeof end_date === 'string') filter.date.$lte = end_date;
+    } else if (hasMonthFilter) {
+      if (
+        typeof month !== 'string' ||
+        !/^\d{1,2}$/.test(month) ||
+        Number(month) < 1 ||
+        Number(month) > 12 ||
+        typeof year !== 'string' ||
+        !/^\d{4}$/.test(year)
+      ) {
+        return res.status(400).json({ error: 'Month and year must be valid numeric values.' });
+      }
+      const monthNumber = Number(month);
+      const monthPrefix = `${year}-${String(monthNumber).padStart(2, '0')}`;
+      filter.date = {
+        $gte: `${monthPrefix}-01`,
+        $lte: `${monthPrefix}-31`,
+      };
+    }
+
+    if (employee_id !== undefined && employee_id !== 'All') {
+      if (typeof employee_id !== 'string' || employee_id.trim() === '') {
+        return res.status(400).json({ error: 'Employee ID must be a non-empty string.' });
+      }
+      filter.employee_id = employee_id.toUpperCase();
     }
 
     if (status && status !== 'All') {
       filter.status = status;
     }
 
-    const records = await Attendance.find(filter).sort({ date: -1, employee_id: 1 });
-    const employees = await Employee.find();
+    const [records, total] = await Promise.all([
+      Attendance.find(filter)
+        .sort({ date: -1, employee_id: 1 })
+        .skip(pagination.skip)
+        .limit(pagination.limit)
+        .lean(),
+      Attendance.countDocuments(filter),
+    ]);
+    const employees = await Employee.find({
+      employee_id: { $in: records.map((record) => record.employee_id) },
+    }).lean();
     const empMap = new Map(employees.map((e) => [e.employee_id, e]));
 
     const enriched = records.map((r) => {
@@ -738,7 +886,12 @@ router.get('/attendance', async (req: AuthRequest, res: Response) => {
       };
     });
 
-    return res.json({ attendance: enriched });
+    return res.json({
+      data: enriched,
+      page: pagination.page,
+      limit: pagination.limit,
+      total,
+    });
   } catch (err: any) {
     console.error('Error fetching attendance list:', err);
     return res.status(500).json({ error: 'Failed to retrieve attendance records.' });

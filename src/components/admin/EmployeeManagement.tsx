@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Employee } from '../../types.ts';
 import { getBusinessDate } from '../../../shared/businessDate.ts';
+import { EMPLOYEE_PAGE_SIZE_DEFAULT } from '../../../shared/pagination.ts';
 import { 
   UserPlus, Search, Filter, Edit3, Trash2, Eye, CheckCircle, 
   XCircle, AlertCircle, Building2, Phone, Mail, MapPin, Calendar, 
@@ -15,6 +16,8 @@ export const EmployeeManagement: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState('All');
   const [sortField, setSortField] = useState<'employee_id' | 'name' | 'monthly_salary'>('employee_id');
   const [sortAsc, setSortAsc] = useState(true);
+  const [employeePage, setEmployeePage] = useState(1);
+  const [employeeTotal, setEmployeeTotal] = useState(0);
 
   // Modals state
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -43,7 +46,7 @@ export const EmployeeManagement: React.FC = () => {
 
   useEffect(() => {
     fetchEmployees();
-  }, [searchTerm, deptFilter, statusFilter]);
+  }, [searchTerm, deptFilter, statusFilter, sortField, sortAsc, employeePage]);
 
   const fetchEmployees = async () => {
     try {
@@ -53,13 +56,23 @@ export const EmployeeManagement: React.FC = () => {
       if (searchTerm) params.append('search', searchTerm);
       if (deptFilter !== 'All') params.append('department', deptFilter);
       if (statusFilter !== 'All') params.append('status', statusFilter);
+      params.append('page', String(employeePage));
+      params.append('limit', String(EMPLOYEE_PAGE_SIZE_DEFAULT));
+      params.append('sort_by', sortField);
+      params.append('sort_order', sortAsc ? 'asc' : 'desc');
 
       const res = await fetch(`/api/admin/employees?${params.toString()}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       if (!res.ok) throw new Error('Failed to fetch employees');
       const data = await res.json();
-      setEmployees(data.employees || []);
+      const totalPages = Math.max(1, Math.ceil(data.total / data.limit));
+      if (employeePage > totalPages) {
+        setEmployeePage(totalPages);
+        return;
+      }
+      setEmployees(data.data || []);
+      setEmployeeTotal(data.total);
     } catch (err: any) {
       setFeedback({ type: 'error', message: err.message || 'Error fetching employees' });
     } finally {
@@ -192,13 +205,7 @@ export const EmployeeManagement: React.FC = () => {
   const departments = ['All', 'Sales', 'Billing', 'Cashier', 'Stock Management', 'Store Manager'];
 
   // Sorting
-  const sortedEmployees = [...employees].sort((a, b) => {
-    let comparison = 0;
-    if (sortField === 'employee_id') comparison = a.employee_id.localeCompare(b.employee_id);
-    else if (sortField === 'name') comparison = a.name.localeCompare(b.name);
-    else if (sortField === 'monthly_salary') comparison = a.monthly_salary - b.monthly_salary;
-    return sortAsc ? comparison : -comparison;
-  });
+  const totalEmployeePages = Math.max(1, Math.ceil(employeeTotal / EMPLOYEE_PAGE_SIZE_DEFAULT));
 
   return (
     <div className="space-y-6">
@@ -245,7 +252,10 @@ export const EmployeeManagement: React.FC = () => {
             id="employee-search-input"
             type="text"
             value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
+            onChange={(e) => {
+              setSearchTerm(e.target.value);
+              setEmployeePage(1);
+            }}
             placeholder="Search by name, ID, or email..."
             className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
           />
@@ -257,7 +267,10 @@ export const EmployeeManagement: React.FC = () => {
             <span className="text-xs text-slate-500 font-medium">Department:</span>
             <select
               value={deptFilter}
-              onChange={(e) => setDeptFilter(e.target.value)}
+              onChange={(e) => {
+                setDeptFilter(e.target.value);
+                setEmployeePage(1);
+              }}
               className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-700 font-medium focus:outline-none"
             >
               {departments.map((d) => (
@@ -270,7 +283,10 @@ export const EmployeeManagement: React.FC = () => {
             <span className="text-xs text-slate-500 font-medium">Status:</span>
             <select
               value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
+              onChange={(e) => {
+                setStatusFilter(e.target.value);
+                setEmployeePage(1);
+              }}
               className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-700 font-medium focus:outline-none"
             >
               <option value="All">All Statuses</option>
@@ -292,6 +308,7 @@ export const EmployeeManagement: React.FC = () => {
                   onClick={() => {
                     if (sortField === 'employee_id') setSortAsc(!sortAsc);
                     else { setSortField('employee_id'); setSortAsc(true); }
+                    setEmployeePage(1);
                   }}
                 >
                   <div className="flex items-center gap-1">
@@ -303,6 +320,7 @@ export const EmployeeManagement: React.FC = () => {
                   onClick={() => {
                     if (sortField === 'name') setSortAsc(!sortAsc);
                     else { setSortField('name'); setSortAsc(true); }
+                    setEmployeePage(1);
                   }}
                 >
                   <div className="flex items-center gap-1">
@@ -317,6 +335,7 @@ export const EmployeeManagement: React.FC = () => {
                   onClick={() => {
                     if (sortField === 'monthly_salary') setSortAsc(!sortAsc);
                     else { setSortField('monthly_salary'); setSortAsc(false); }
+                    setEmployeePage(1);
                   }}
                 >
                   <div className="flex items-center justify-end gap-1">
@@ -335,14 +354,14 @@ export const EmployeeManagement: React.FC = () => {
                     Loading employees...
                   </td>
                 </tr>
-              ) : sortedEmployees.length === 0 ? (
+              ) : employees.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="py-12 text-center text-slate-400">
                     No employees matching filters found.
                   </td>
                 </tr>
               ) : (
-                sortedEmployees.map((emp) => (
+                employees.map((emp) => (
                   <tr key={emp.employee_id} className="hover:bg-slate-50/70 transition-colors">
                     <td className="py-3 px-4 font-mono font-bold text-slate-900">{emp.employee_id}</td>
                     <td className="py-3 px-4">
@@ -411,6 +430,31 @@ export const EmployeeManagement: React.FC = () => {
               )}
             </tbody>
           </table>
+        </div>
+      </div>
+      <div className="flex items-center justify-between text-xs text-slate-500">
+        <span>
+          Showing {employeeTotal === 0 ? 0 : (employeePage - 1) * EMPLOYEE_PAGE_SIZE_DEFAULT + 1}
+          –{Math.min(employeePage * EMPLOYEE_PAGE_SIZE_DEFAULT, employeeTotal)} of {employeeTotal} employees
+        </span>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            disabled={employeePage <= 1 || isLoading}
+            onClick={() => setEmployeePage((page) => page - 1)}
+            className="px-3 py-1.5 rounded-lg border border-slate-200 disabled:opacity-40"
+          >
+            Previous
+          </button>
+          <span>Page {employeePage} of {totalEmployeePages}</span>
+          <button
+            type="button"
+            disabled={employeePage >= totalEmployeePages || isLoading}
+            onClick={() => setEmployeePage((page) => page + 1)}
+            className="px-3 py-1.5 rounded-lg border border-slate-200 disabled:opacity-40"
+          >
+            Next
+          </button>
         </div>
       </div>
 

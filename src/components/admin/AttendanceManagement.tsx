@@ -1,6 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { AttendanceRecord, Employee, AttendanceStatus, RosterEmployeeRow } from '../../types.ts';
 import { addCalendarDays, getBusinessDate, getBusinessDateParts } from '../../../shared/businessDate.ts';
+import {
+  ATTENDANCE_PAGE_SIZE_DEFAULT,
+  ATTENDANCE_PAGE_SIZE_MAX,
+  EMPLOYEE_PAGE_SIZE_MAX,
+} from '../../../shared/pagination.ts';
 import { 
   Calendar as CalendarIcon, CheckCircle2, Clock, 
   Edit2, Trash2, Users, CheckCheck, 
@@ -40,9 +45,13 @@ export const AttendanceManagement: React.FC = () => {
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [isRecordsLoading, setIsRecordsLoading] = useState(false);
-  const [filterMode, setFilterMode] = useState<'date' | 'month'>('date');
+  const [filterMode, setFilterMode] = useState<'date' | 'month' | 'range'>('date');
   const [selectedMonth, setSelectedMonth] = useState<number>(() => getBusinessDateParts().month);
   const [selectedYear, setSelectedYear] = useState<number>(() => getBusinessDateParts().year);
+  const [rangeStartDate, setRangeStartDate] = useState(todayStr);
+  const [rangeEndDate, setRangeEndDate] = useState(todayStr);
+  const [recordsPage, setRecordsPage] = useState(1);
+  const [recordsTotal, setRecordsTotal] = useState(0);
   const [empFilter, setEmpFilter] = useState('All');
   const [statusFilter, setStatusFilter] = useState('All');
 
@@ -79,24 +88,53 @@ export const AttendanceManagement: React.FC = () => {
     } else if (activeTab === 'records' || activeTab === 'calendar') {
       fetchAttendanceRecords();
     }
-  }, [selectedDate, activeTab]);
-
-  useEffect(() => {
-    if (activeTab === 'records' || activeTab === 'calendar') {
-      fetchAttendanceRecords();
-    }
-  }, [filterMode, selectedMonth, selectedYear, empFilter, statusFilter]);
+  }, [
+    selectedDate,
+    activeTab,
+    filterMode,
+    selectedMonth,
+    selectedYear,
+    rangeStartDate,
+    rangeEndDate,
+    empFilter,
+    statusFilter,
+    recordsPage,
+  ]);
 
   const fetchEmployees = async () => {
     try {
       const token = localStorage.getItem('erp_token');
-      const res = await fetch('/api/admin/employees', {
+      const firstParams = new URLSearchParams({
+        page: '1',
+        limit: String(EMPLOYEE_PAGE_SIZE_MAX),
+      });
+      const res = await fetch(`/api/admin/employees?${firstParams.toString()}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json();
-      setEmployees(data.employees || []);
+      if (!res.ok) throw new Error(data.error || 'Failed to fetch employees.');
+      const pageCount = Math.ceil(data.total / data.limit);
+      const remainingPages = await Promise.all(
+        Array.from({ length: Math.max(0, pageCount - 1) }, async (_, index) => {
+          const pageParams = new URLSearchParams({
+            page: String(index + 2),
+            limit: String(EMPLOYEE_PAGE_SIZE_MAX),
+          });
+          const pageResponse = await fetch(`/api/admin/employees?${pageParams.toString()}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          const pageData = await pageResponse.json();
+          if (!pageResponse.ok) throw new Error(pageData.error || 'Failed to fetch employee page.');
+          return pageData.data || [];
+        })
+      );
+      setEmployees([...(data.data || []), ...remainingPages.flat()]);
     } catch (err) {
       console.error('Error loading employees', err);
+      setFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Error loading employees.',
+      });
     }
   };
 
@@ -137,18 +175,53 @@ export const AttendanceManagement: React.FC = () => {
       if (filterMode === 'date' && selectedDate) {
         params.append('date', selectedDate);
       } else if (filterMode === 'month') {
-        params.append('month', String(selectedMonth));
-        params.append('year', String(selectedYear));
+        const monthPrefix = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}`;
+        const lastDay = new Date(Date.UTC(selectedYear, selectedMonth, 0)).getUTCDate();
+        params.append('start_date', `${monthPrefix}-01`);
+        params.append('end_date', `${monthPrefix}-${String(lastDay).padStart(2, '0')}`);
+      } else {
+        if (rangeStartDate) params.append('start_date', rangeStartDate);
+        if (rangeEndDate) params.append('end_date', rangeEndDate);
       }
 
       if (empFilter !== 'All') params.append('employee_id', empFilter);
       if (statusFilter !== 'All') params.append('status', statusFilter);
+      const isCalendarView = activeTab === 'calendar';
+      const pageLimit = isCalendarView ? ATTENDANCE_PAGE_SIZE_MAX : ATTENDANCE_PAGE_SIZE_DEFAULT;
+      params.append('page', String(isCalendarView ? 1 : recordsPage));
+      params.append('limit', String(pageLimit));
 
       const res = await fetch(`/api/admin/attendance?${params.toString()}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json();
-      setRecords(data.attendance || []);
+      if (!res.ok) throw new Error(data.error || 'Failed to fetch attendance.');
+      setRecordsTotal(data.total);
+      const totalPages = Math.max(1, Math.ceil(data.total / data.limit));
+      if (!isCalendarView && recordsPage > totalPages) {
+        setRecordsPage(totalPages);
+        return;
+      }
+
+      if (isCalendarView && totalPages > 1) {
+        const remainingPages = await Promise.all(
+          Array.from({ length: totalPages - 1 }, async (_, index) => {
+            const pageParams = new URLSearchParams(params);
+            pageParams.set('page', String(index + 2));
+            const pageResponse = await fetch(`/api/admin/attendance?${pageParams.toString()}`, {
+              headers: { Authorization: `Bearer ${token}` },
+            });
+            const pageData = await pageResponse.json();
+            if (!pageResponse.ok) {
+              throw new Error(pageData.error || 'Failed to fetch attendance page.');
+            }
+            return pageData.data || [];
+          })
+        );
+        setRecords([...(data.data || []), ...remainingPages.flat()]);
+      } else {
+        setRecords(data.data || []);
+      }
     } catch (err: any) {
       setFeedback({ type: 'error', message: err.message || 'Failed to fetch attendance.' });
     } finally {
@@ -1038,9 +1111,12 @@ export const AttendanceManagement: React.FC = () => {
           {/* Filter Toolbar */}
           <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col lg:flex-row gap-4 items-center justify-between">
             <div className="flex items-center gap-2 w-full lg:w-auto">
-              <div className="grid grid-cols-2 p-1 bg-slate-100 rounded-lg text-xs font-semibold">
+              <div className="grid grid-cols-3 p-1 bg-slate-100 rounded-lg text-xs font-semibold">
                 <button
-                  onClick={() => setFilterMode('date')}
+                  onClick={() => {
+                    setFilterMode('date');
+                    setRecordsPage(1);
+                  }}
                   className={`px-3 py-1.5 rounded-md transition-all ${
                     filterMode === 'date' ? 'bg-white shadow-sm text-indigo-600 font-bold' : 'text-slate-600 hover:text-slate-900'
                   }`}
@@ -1048,12 +1124,26 @@ export const AttendanceManagement: React.FC = () => {
                   By Single Date
                 </button>
                 <button
-                  onClick={() => setFilterMode('month')}
+                  onClick={() => {
+                    setFilterMode('month');
+                    setRecordsPage(1);
+                  }}
                   className={`px-3 py-1.5 rounded-md transition-all ${
                     filterMode === 'month' ? 'bg-white shadow-sm text-indigo-600 font-bold' : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
                   By Full Month
+                </button>
+                <button
+                  onClick={() => {
+                    setFilterMode('range');
+                    setRecordsPage(1);
+                  }}
+                  className={`px-3 py-1.5 rounded-md transition-all ${
+                    filterMode === 'range' ? 'bg-white shadow-sm text-indigo-600 font-bold' : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Date Range
                 </button>
               </div>
 
@@ -1061,14 +1151,20 @@ export const AttendanceManagement: React.FC = () => {
                 <input
                   type="date"
                   value={selectedDate}
-                  onChange={(e) => setSelectedDate(e.target.value)}
+                  onChange={(e) => {
+                    setSelectedDate(e.target.value);
+                    setRecordsPage(1);
+                  }}
                   className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
-              ) : (
+              ) : filterMode === 'month' ? (
                 <div className="flex items-center gap-2">
                   <select
                     value={selectedMonth}
-                    onChange={(e) => setSelectedMonth(parseInt(e.target.value))}
+                    onChange={(e) => {
+                      setSelectedMonth(parseInt(e.target.value));
+                      setRecordsPage(1);
+                    }}
                     className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 focus:outline-none"
                   >
                     {[
@@ -1080,13 +1176,39 @@ export const AttendanceManagement: React.FC = () => {
                   </select>
                   <select
                     value={selectedYear}
-                    onChange={(e) => setSelectedYear(parseInt(e.target.value))}
+                    onChange={(e) => {
+                      setSelectedYear(parseInt(e.target.value));
+                      setRecordsPage(1);
+                    }}
                     className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 focus:outline-none"
                   >
                     {[2025, 2026, 2027].map((y) => (
                       <option key={y} value={y}>{y}</option>
                     ))}
                   </select>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <label className="text-[11px] text-slate-500">From</label>
+                  <input
+                    type="date"
+                    value={rangeStartDate}
+                    onChange={(e) => {
+                      setRangeStartDate(e.target.value);
+                      setRecordsPage(1);
+                    }}
+                    className="px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs"
+                  />
+                  <label className="text-[11px] text-slate-500">To</label>
+                  <input
+                    type="date"
+                    value={rangeEndDate}
+                    onChange={(e) => {
+                      setRangeEndDate(e.target.value);
+                      setRecordsPage(1);
+                    }}
+                    className="px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs"
+                  />
                 </div>
               )}
             </div>
@@ -1096,7 +1218,10 @@ export const AttendanceManagement: React.FC = () => {
                 <span className="text-xs text-slate-500 font-medium">Employee:</span>
                 <select
                   value={empFilter}
-                  onChange={(e) => setEmpFilter(e.target.value)}
+                  onChange={(e) => {
+                    setEmpFilter(e.target.value);
+                    setRecordsPage(1);
+                  }}
                   className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-700 font-medium focus:outline-none max-w-[160px]"
                 >
                   <option value="All">All Staff</option>
@@ -1112,7 +1237,10 @@ export const AttendanceManagement: React.FC = () => {
                 <span className="text-xs text-slate-500 font-medium">Status:</span>
                 <select
                   value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value)}
+                  onChange={(e) => {
+                    setStatusFilter(e.target.value);
+                    setRecordsPage(1);
+                  }}
                   className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-700 font-medium focus:outline-none"
                 >
                   <option value="All">All Statuses</option>
@@ -1230,6 +1358,36 @@ export const AttendanceManagement: React.FC = () => {
                   )}
                 </tbody>
               </table>
+            </div>
+          </div>
+          <div className="flex items-center justify-between text-xs text-slate-500">
+            <span>
+              Showing {recordsTotal === 0 ? 0 : (recordsPage - 1) * ATTENDANCE_PAGE_SIZE_DEFAULT + 1}
+              –{Math.min(recordsPage * ATTENDANCE_PAGE_SIZE_DEFAULT, recordsTotal)} of {recordsTotal} attendance records
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                disabled={recordsPage <= 1 || isRecordsLoading}
+                onClick={() => setRecordsPage((page) => page - 1)}
+                className="px-3 py-1.5 rounded-lg border border-slate-200 disabled:opacity-40"
+              >
+                Previous
+              </button>
+              <span>
+                Page {recordsPage} of {Math.max(1, Math.ceil(recordsTotal / ATTENDANCE_PAGE_SIZE_DEFAULT))}
+              </span>
+              <button
+                type="button"
+                disabled={
+                  recordsPage >= Math.max(1, Math.ceil(recordsTotal / ATTENDANCE_PAGE_SIZE_DEFAULT)) ||
+                  isRecordsLoading
+                }
+                onClick={() => setRecordsPage((page) => page + 1)}
+                className="px-3 py-1.5 rounded-lg border border-slate-200 disabled:opacity-40"
+              >
+                Next
+              </button>
             </div>
           </div>
         </div>
