@@ -90,7 +90,7 @@ npm run build
 npm start
 ```
 
-Production requires `MONGODB_URI` and a `SESSION_SECRET` of at least 32 characters. The server exits with an actionable error if the database is unavailable; it does not switch to temporary storage. The hosting platform must provide `PORT`; the server binds to `0.0.0.0`. Set `NODE_ENV=production`.
+Production requires `MONGODB_URI` and a `SESSION_SECRET` of at least 32 characters. If MongoDB is unavailable at startup, the server still binds to `0.0.0.0` on the hosting platform's `PORT` and retries database initialization with exponential backoff, capped at 60 seconds. It does not switch to temporary storage; database-backed API requests return HTTP 503 until the database is ready. Set `NODE_ENV=production`.
 
 ### Manual password resets
 
@@ -98,7 +98,7 @@ Password resets are handled manually by the Store Owner; there is no email reset
 
 The server does not trust forwarded client IP headers by default. `TRUST_PROXY` is the exact number of trusted proxy hops and must be a non-negative integer; it defaults to `0` for direct connections. For the single-service Render deployment behind one trusted proxy, set `TRUST_PROXY=1` in Render's environment settings. Do not set a hop count unless the deployment topology is controlled.
 
-For a Node.js host, use `npm run build` as the build command and `npm start` as the start command, with the environment variables above configured in the host's secret settings. Provision the first owner using the setup CLI against the same persistent database before giving client users access. No hosting-provider-specific deployment manifest is present in this repository, so provider-specific networking and health-check setup must be completed in that provider's dashboard.
+For a Node.js host, use `npm run build` as the build command and `npm start` as the start command, with the environment variables above configured in the host's secret settings. Provision the first owner using the setup CLI against the same persistent database before giving client users access. Configure the hosting platform's health check to use `GET /api/health`; it returns HTTP 200 only when the database is connected and HTTP 503 while degraded. No hosting-provider-specific deployment manifest is present in this repository, so provider-specific networking and health-check configuration must be completed in that provider's dashboard.
 
 To inventory legacy password hashes, set `AUDIT_MONGODB_URI` to a read-only, non-production database copy and `AUDIT_NON_PRODUCTION=true`, then run `npm run report:legacy-password-hashes`. The report emits aggregate counts only; it does not print identifiers or hashes and does not modify data. Do not run it against production.
 
@@ -114,13 +114,11 @@ To inventory legacy password hashes, set `AUDIT_MONGODB_URI` to a read-only, non
   ```bash
   curl http://127.0.0.1:3000/api/health
   ```
-  Returns:
-  ```json
-  {
-    "status": "ok",
-    "uptime": 12,
-    "database": "connected",
-    "engine": "MongoDB",
-    "timestamp": "2026-10-28T02:11:00.000Z"
-  }
+  No authentication is required. The exact responses are:
+  ```text
+  HTTP 200
+  {"status":"ok","database":"connected"}
+
+  HTTP 503
+  {"status":"degraded","database":"disconnected"}
   ```
