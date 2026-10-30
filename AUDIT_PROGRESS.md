@@ -36,7 +36,7 @@ pattern.
 |---|---|---|
 | F-13 | Done - log-matched; Asia/Kolkata business dates, no stored timestamp shifts | `ffcce56` |
 | F-14 | Done - paginated employee/attendance lists, preserved complete roster and calculations; added attendance date/employee index | `3a6e2db` |
-| F-15 | Pending | - |
+| F-15 | Done - strict session-bound audits for payroll/account changes; best-effort failures emit `AUDIT_WRITE_FAILED` | `6f10b88` |
 | F-16 | Pending | - |
 | F-01 | Pending | - |
 
