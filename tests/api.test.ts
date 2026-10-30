@@ -1007,6 +1007,7 @@ describe('API characterization', () => {
       });
 
     expect(response.status).toBe(409);
+    expect(response.body.error).toBe('An employee or account with this email already exists.');
     expect(await Employee.exists({ email })).toBeNull();
     expect(await User.exists({ email, username: existingUsername })).toBeTruthy();
     expect(await User.exists({ username: derivedUsername })).toBeNull();
