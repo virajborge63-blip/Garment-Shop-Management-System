@@ -513,6 +513,8 @@ export const EmployeeManagement: React.FC = () => {
                     <input
                       type="number"
                       required
+                      min="0.01"
+                      step="0.01"
                       value={formData.per_day_salary}
                       onChange={(e) => handlePerDaySalaryChange(parseFloat(e.target.value) || 0)}
                       className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg font-mono text-slate-900"
@@ -673,6 +675,8 @@ export const EmployeeManagement: React.FC = () => {
                     <input
                       type="number"
                       required
+                      min="0.01"
+                      step="0.01"
                       value={formData.per_day_salary}
                       onChange={(e) => handlePerDaySalaryChange(parseFloat(e.target.value) || 0)}
                       className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg font-mono text-slate-900"

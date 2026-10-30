@@ -210,6 +210,53 @@ describe('API characterization', () => {
     expect(await Attendance.countDocuments({ date: '2025-02-04' })).toBe(0);
   });
 
+  it('rejects missing and non-positive daily salaries when creating employees', async () => {
+    const invalidSalaries = [undefined, 0, -1, 'not-a-number'];
+
+    for (const [index, per_day_salary] of invalidSalaries.entries()) {
+      const email = `invalid-salary-${index}-${suffix}@example.test`;
+      const response = await request(app)
+        .post('/api/admin/employees')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          name: 'Invalid Salary Employee',
+          email,
+          department: 'Testing',
+          designation: 'Test Role',
+          password: 'Test-password-123!',
+          per_day_salary,
+        });
+
+      expect(response.status).toBe(400);
+      expect(await Employee.exists({ email })).toBeNull();
+    }
+  });
+
+  it('requires a daily salary when creating an Employee model directly', async () => {
+    const employee = new Employee({
+      employee_id: `NO-SALARY-${suffix}`,
+      name: 'Missing Salary Employee',
+      email: `no-salary-${suffix}@example.test`,
+      department: 'Testing',
+      designation: 'Test Role',
+      joining_date: '2025-01-01',
+    });
+
+    await expect(employee.validate()).rejects.toThrow(/per_day_salary/);
+  });
+
+  it('rejects non-positive daily salary updates without changing the existing salary', async () => {
+    for (const per_day_salary of [0, -1, 'not-a-number']) {
+      const response = await request(app)
+        .put(`/api/admin/employees/${employeeId}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ per_day_salary });
+
+      expect(response.status).toBe(400);
+      expect((await Employee.findOne({ employee_id: employeeId }))?.per_day_salary).toBe(800);
+    }
+  });
+
   it('generates payroll and allows an admin to mark it paid', async () => {
     await Attendance.create({
       employee_id: employeeId,

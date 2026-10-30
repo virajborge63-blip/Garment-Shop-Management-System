@@ -27,7 +27,14 @@ const EmployeeSchema = new Schema<IEmployee>(
     department: { type: String, required: true, trim: true },
     designation: { type: String, required: true, trim: true },
     joining_date: { type: String, required: true },
-    per_day_salary: { type: Number, required: true, default: 800 },
+    per_day_salary: {
+      type: Number,
+      required: true,
+      validate: {
+        validator: (salary: number) => Number.isFinite(salary) && salary > 0,
+        message: 'Per-day salary must be a finite number greater than zero.',
+      },
+    },
     monthly_salary: { type: Number, required: true, default: 20800 },
     overtime_rate: { type: Number, required: true, default: 150 },
     status: { type: String, enum: ['active', 'inactive'], default: 'active' },

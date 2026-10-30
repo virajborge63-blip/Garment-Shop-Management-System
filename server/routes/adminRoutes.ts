@@ -17,6 +17,17 @@ const router = Router();
 router.use(authenticateToken);
 router.use(requireAdmin);
 
+function parsePositiveSalary(value: unknown): number | undefined {
+  if (
+    (typeof value !== 'number' && typeof value !== 'string') ||
+    (typeof value === 'string' && value.trim() === '')
+  ) {
+    return undefined;
+  }
+  const salary = Number(value);
+  return Number.isFinite(salary) && salary > 0 ? salary : undefined;
+}
+
 // ==========================================
 // 1. ADMIN DASHBOARD
 // ==========================================
@@ -297,6 +308,10 @@ router.post('/employees', async (req: AuthRequest, res: Response) => {
     if (!name || !email || !department || !designation) {
       return res.status(400).json({ error: 'Name, email, department, and designation are required.' });
     }
+    const pSalary = parsePositiveSalary(per_day_salary);
+    if (pSalary === undefined) {
+      return res.status(400).json({ error: 'Per-day salary must be a finite number greater than zero.' });
+    }
     if (typeof password !== 'string' || password.length < 12) {
       return res.status(400).json({ error: 'A unique initial password of at least 12 characters is required.' });
     }
@@ -320,7 +335,6 @@ router.post('/employees', async (req: AuthRequest, res: Response) => {
       duplicateCheck = await Employee.findOne({ employee_id: newEmpId });
     }
 
-    const pSalary = parseFloat(per_day_salary) || 800;
     const mSalary = parseFloat(monthly_salary) || (pSalary * 26);
     const otRate = parseFloat(overtime_rate) || 150;
     const jDate = joining_date || new Date().toISOString().split('T')[0];
@@ -395,7 +409,12 @@ router.put('/employees/:id', async (req: AuthRequest, res: Response) => {
       per_day_salary, monthly_salary, overtime_rate, status, avatar_url, password
     } = req.body;
 
-    const pDay = per_day_salary !== undefined ? parseFloat(per_day_salary) : oldEmp.per_day_salary;
+    const pDay = per_day_salary !== undefined
+      ? parsePositiveSalary(per_day_salary)
+      : oldEmp.per_day_salary;
+    if (pDay === undefined) {
+      return res.status(400).json({ error: 'Per-day salary must be a finite number greater than zero.' });
+    }
     const mSalary = monthly_salary !== undefined ? parseFloat(monthly_salary) : oldEmp.monthly_salary;
     const otRate = overtime_rate !== undefined ? parseFloat(overtime_rate) : oldEmp.overtime_rate;
 
