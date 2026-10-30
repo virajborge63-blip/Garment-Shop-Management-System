@@ -12,6 +12,7 @@ import adminRoutes from './server/routes/adminRoutes.ts';
 import superAdminRoutes from './server/routes/superAdminRoutes.ts';
 import employeeRoutes from './server/routes/employeeRoutes.ts';
 import shopRoutes from './server/routes/shopRoutes.ts';
+import { createHealthHandler } from './server/routes/healthRoute.ts';
 
 let databaseReady = false;
 
@@ -101,21 +102,7 @@ async function startServer() {
   app.use('/api', apiRateLimiter);
 
   // Health-check endpoint
-  app.get('/api/health', (req, res) => {
-    try {
-      const isDbConnected = isDatabaseAvailable();
-      const isDbConnecting = mongoose.connection.readyState === 2;
-      return res.status(isDbConnected ? 200 : 503).json({
-        status: isDbConnected ? 'ok' : 'error',
-        uptime: Math.round(process.uptime()),
-        database: isDbConnected ? 'connected' : isDbConnecting ? 'connecting' : 'disconnected',
-        engine: 'MongoDB',
-        timestamp: new Date().toISOString()
-      });
-    } catch {
-      return res.status(500).json({ status: 'error', message: 'Health check failed' });
-    }
-  });
+  app.get('/api/health', createHealthHandler(isDatabaseAvailable));
 
   app.use('/api', (req, res, next) => {
     if (!isDatabaseAvailable()) {

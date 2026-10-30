@@ -20,8 +20,19 @@ import {
 let mongoMemoryServerInstance: MongoMemoryServer | null = null;
 let isConnected = false;
 
-function getMongoConnectionDiagnostics(error: unknown): Array<{ name: string; code?: string | number }> {
-  const diagnostics: Array<{ name: string; code?: string | number }> = [];
+function sanitizeMongoConnectionMessage(message: unknown): string {
+  if (typeof message !== 'string') {
+    return 'Unknown MongoDB connection error';
+  }
+
+  return message
+    .replace(/mongodb(?:\+srv)?:\/\/[^\s"'<>]+/gi, '[MongoDB URI]')
+    .replace(/[\r\n\t]+/g, ' ')
+    .slice(0, 300);
+}
+
+function getMongoConnectionDiagnostics(error: unknown): Array<{ name: string; message: string }> {
+  const diagnostics: Array<{ name: string; message: string }> = [];
   const pending: unknown[] = [error];
   const seen = new Set<object>();
 
@@ -34,24 +45,19 @@ function getMongoConnectionDiagnostics(error: unknown): Array<{ name: string; co
     seen.add(current);
     const value = current as {
       name?: unknown;
-      code?: unknown;
+      message?: unknown;
       cause?: unknown;
       errors?: unknown;
       reason?: unknown;
       error?: unknown;
       servers?: unknown;
     };
-    const diagnostic: { name: string; code?: string | number } = {
+    const diagnostic: { name: string; message: string } = {
       name: typeof value.name === 'string' && /^[A-Za-z][A-Za-z0-9_]{0,79}$/.test(value.name)
         ? value.name
         : 'MongoConnectionError',
+      message: sanitizeMongoConnectionMessage(value.message),
     };
-    if (
-      typeof value.code === 'number' ||
-      (typeof value.code === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(value.code))
-    ) {
-      diagnostic.code = value.code;
-    }
     diagnostics.push(diagnostic);
 
     if (value.cause) {

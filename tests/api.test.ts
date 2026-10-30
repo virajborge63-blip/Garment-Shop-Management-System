@@ -21,7 +21,7 @@ process.env.SESSION_SECRET = 'test-session-secret-with-more-than-thirty-two-char
 const mongoose = (await import('mongoose')).default;
 await mongoose.connect(process.env.MONGODB_URI);
 
-const { Attendance, AuditLog, Category, Employee, Payroll, Product, Sale, Session, Setting, User, hashPassword } =
+const { Attendance, AuditLog, Category, Employee, Payroll, Product, Sale, Session, Setting, User, connectDB, hashPassword } =
   await import('../server/db.ts');
 const { default: authRoutes } = await import('../server/routes/authRoutes.ts');
 const { default: adminRoutes } = await import('../server/routes/adminRoutes.ts');
@@ -140,6 +140,39 @@ describe('API characterization', () => {
       .send({ email: employeeCredentials.email });
 
     expect(response.status).toBe(404);
+  });
+
+  it('sanitizes MongoDB connection failure logs', async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    const originalMongoUri = process.env.MONGODB_URI;
+    const fakeUri = 'mongodb+srv://audit-user:fake-password@cluster0.invalid/garment-shop';
+    const connectionError = new Error(`Could not connect to ${fakeUri}`);
+    connectionError.name = 'MongooseServerSelectionError';
+    const connectionSpy = vi.spyOn(mongoose, 'connect').mockImplementationOnce(async () => {
+      throw connectionError;
+    });
+    const errorLogSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    process.env.NODE_ENV = 'production';
+    process.env.MONGODB_URI = fakeUri;
+
+    try {
+      await expect(connectDB()).rejects.toThrow('MongoDB connection failed.');
+
+      const loggedFailure = JSON.stringify(errorLogSpy.mock.calls);
+      expect(loggedFailure).toContain('MongooseServerSelectionError');
+      expect(loggedFailure).toContain('[MongoDB URI]');
+      expect(loggedFailure).not.toContain('audit-user');
+      expect(loggedFailure).not.toContain('fake-password');
+      expect(loggedFailure).not.toContain('cluster0.invalid');
+    } finally {
+      connectionSpy.mockRestore();
+      errorLogSpy.mockRestore();
+      if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = originalNodeEnv;
+      if (originalMongoUri === undefined) delete process.env.MONGODB_URI;
+      else process.env.MONGODB_URI = originalMongoUri;
+    }
   });
 
   it('requires a setup token when production is inferred from the server entry point', async () => {
