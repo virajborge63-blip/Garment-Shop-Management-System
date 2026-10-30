@@ -320,7 +320,16 @@ router.post('/employees', async (req: AuthRequest, res: Response) => {
       avatar_url, password
     } = req.body;
 
-    if (!name || !email || !department || !designation) {
+    if (
+      typeof name !== 'string' ||
+      typeof email !== 'string' ||
+      typeof department !== 'string' ||
+      typeof designation !== 'string' ||
+      !name.trim() ||
+      !email.trim() ||
+      !department.trim() ||
+      !designation.trim()
+    ) {
       return res.status(400).json({ error: 'Name, email, department, and designation are required.' });
     }
     const pSalary = parsePositiveSalary(per_day_salary);
@@ -332,11 +341,17 @@ router.post('/employees', async (req: AuthRequest, res: Response) => {
     }
 
     const cleanEmail = email.trim().toLowerCase();
-
-    // Check unique email
-    const existingEmp = await Employee.findOne({ email: cleanEmail });
-    if (existingEmp) {
-      return res.status(400).json({ error: 'An employee with this email already exists.' });
+    const username = cleanEmail.split('@')[0].toLowerCase();
+    const [existingEmployee, existingUserEmail, existingUsername] = await Promise.all([
+      Employee.exists({ email: cleanEmail }),
+      User.exists({ email: cleanEmail }),
+      User.exists({ username }),
+    ]);
+    if (existingEmployee || existingUserEmail) {
+      return res.status(409).json({ error: 'An employee or account with this email already exists.' });
+    }
+    if (existingUsername) {
+      return res.status(409).json({ error: 'The username derived from this email is already in use.' });
     }
 
     // Auto-generate employee ID (EMP001, EMP002, ...)
@@ -355,7 +370,7 @@ router.post('/employees', async (req: AuthRequest, res: Response) => {
     const jDate = joining_date || new Date().toISOString().split('T')[0];
     const defaultAvatar = avatar_url || `https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80`;
 
-    const newEmp = await Employee.create({
+    const employeeData = {
       employee_id: newEmpId,
       name: name.trim(),
       phone: phone || '',
@@ -370,24 +385,33 @@ router.post('/employees', async (req: AuthRequest, res: Response) => {
       status: 'active',
       avatar_url: defaultAvatar,
       created_at: new Date(),
-    });
-
-    // Create user login account for employee
-    const username = cleanEmail.split('@')[0].toLowerCase();
-    const passwordHash = hashPassword(password);
-
-    const existingUser = await User.findOne({ username });
-    const finalUsername = existingUser ? `${username}_${newEmpId.toLowerCase()}` : username;
-
-    await User.create({
-      username: finalUsername,
+    };
+    const userData = {
+      username,
       email: cleanEmail,
-      password_hash: passwordHash,
-      role: 'EMPLOYEE',
+      password_hash: hashPassword(password),
+      role: 'EMPLOYEE' as const,
       employee_id: newEmpId,
-      status: 'active',
+      status: 'active' as const,
       created_at: new Date(),
-    });
+    };
+
+    const session = await Employee.startSession();
+    let newEmp: InstanceType<typeof Employee> | null = null;
+    try {
+      await session.withTransaction(async () => {
+        const employee = new Employee(employeeData);
+        const user = new User(userData);
+        await employee.save({ session });
+        await user.save({ session });
+        newEmp = employee;
+      });
+    } finally {
+      await session.endSession();
+    }
+    if (!newEmp) {
+      throw new Error('Employee account transaction completed without creating records.');
+    }
 
     await logAudit(
       req.user!.username,
@@ -405,6 +429,9 @@ router.post('/employees', async (req: AuthRequest, res: Response) => {
       employee_id: newEmpId,
     });
   } catch (err: any) {
+    if (isDuplicateKeyError(err)) {
+      return res.status(409).json({ error: 'An employee ID, email, or username already exists.' });
+    }
     console.error('Error adding employee:', err);
     return res.status(500).json({ error: 'Failed to add employee.' });
   }

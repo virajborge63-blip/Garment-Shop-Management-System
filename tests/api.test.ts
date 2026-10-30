@@ -409,6 +409,83 @@ describe('API characterization', () => {
     }
   });
 
+  it('rejects employee creation when the login email is already in use', async () => {
+    const email = `f10-email-${suffix}@example.test`;
+    await User.create({
+      username: `existing-${suffix}`,
+      email,
+      password_hash: hashPassword('Test-password-123!'),
+      role: 'EMPLOYEE',
+      employee_id: null,
+      status: 'active',
+    });
+
+    const response = await request(app)
+      .post('/api/admin/employees')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        name: 'F10 Email Conflict',
+        email,
+        department: 'Testing',
+        designation: 'Test Role',
+        per_day_salary: 800,
+        password: 'Test-password-123!',
+      });
+
+    expect(response.status).toBe(409);
+    expect(await Employee.exists({ email })).toBeNull();
+  });
+
+  it('rejects employee creation when the derived username is already in use', async () => {
+    const email = `f10-username-${suffix}@example.test`;
+    await User.create({
+      username: `f10-username-${suffix}`,
+      email: `different-${suffix}@example.test`,
+      password_hash: hashPassword('Test-password-123!'),
+      role: 'EMPLOYEE',
+      employee_id: null,
+      status: 'active',
+    });
+
+    const response = await request(app)
+      .post('/api/admin/employees')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        name: 'F10 Username Conflict',
+        email,
+        department: 'Testing',
+        designation: 'Test Role',
+        per_day_salary: 800,
+        password: 'Test-password-123!',
+      });
+
+    expect(response.status).toBe(409);
+    expect(await Employee.exists({ email })).toBeNull();
+  });
+
+  it('creates only one employee and account for concurrent identical registrations', async () => {
+    const email = `f10-concurrent-${suffix}@example.test`;
+    const payload = {
+      name: 'F10 Concurrent Employee',
+      email,
+      department: 'Testing',
+      designation: 'Test Role',
+      per_day_salary: 800,
+      password: 'Test-password-123!',
+    };
+    const createEmployee = () =>
+      request(app)
+        .post('/api/admin/employees')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send(payload);
+
+    const responses = await Promise.all([createEmployee(), createEmployee()]);
+
+    expect(responses.map((response) => response.status).sort()).toEqual([201, 409]);
+    expect(await Employee.countDocuments({ email })).toBe(1);
+    expect(await User.countDocuments({ email })).toBe(1);
+  });
+
   it('processes a catalog sale using the server-side product price', async () => {
     const product = await Product.create({
       name: 'Test Garment',
